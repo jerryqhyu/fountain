@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db, scheduler
+from . import db, scheduler, store
 from .api.routes import router
 from .config import DISABLE_SCHEDULER, STATIC_DIR
 from .episodes import catalog
@@ -25,6 +25,10 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    try:
+        store.hydrate_if_empty()
+    except Exception:  # noqa: BLE001 - a damaged store must not stop the dashboard from starting
+        logging.getLogger("store").exception("hydrate from store failed; continuing with an empty DB")
     catalog.seed()
     if not DISABLE_SCHEDULER:
         scheduler.start()

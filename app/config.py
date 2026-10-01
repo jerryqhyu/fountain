@@ -14,6 +14,10 @@ DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("DB_PATH", DATA_DIR / "volcano.db"))
 STATIC_DIR = ROOT / "static"
+# Durable, git-tracked history + model store (see docs/DATA_STORE.md). DATA_DIR is a disposable cache.
+STORE_DIR = Path(os.getenv("STORE_DIR", ROOT / "store"))
+# Set STORE_AUTOEXPORT=0 to stop the daily DB -> store export job.
+STORE_AUTOEXPORT = os.getenv("STORE_AUTOEXPORT", "1") != "0"
 
 FIRMS_MAP_KEY = os.getenv("FIRMS_MAP_KEY", "").strip()
 # Set DISABLE_SCHEDULER=1 to run the API without background polling (tests).

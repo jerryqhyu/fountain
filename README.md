@@ -31,7 +31,11 @@ On first start with an empty `data/`, the server backfills history on its own: n
 tilt releases, the episode table, and about an hour of RSAM. It trains a first model without
 RSAM, then retrains once RSAM is in. `scripts/backfill_rsam.py` runs the RSAM step by hand.
 
-Optional `.env` keys: `FIRMS_MAP_KEY`, `DATA_DIR`, `DISABLE_SCHEDULER=1`.
+Optional `.env` keys: `FIRMS_MAP_KEY`, `DATA_DIR`, `DISABLE_SCHEDULER=1`, `STORE_DIR`, `STORE_AUTOEXPORT=0`.
+
+## History and model store
+
+`store/` is the durable record (Parquet + JSON, committed to git); `data/volcano.db` is a working copy rebuilt from it. On a fresh checkout the app loads `store/` into an empty DB at startup, so history isn't re-pulled. `uv run python -m app.store export|hydrate|verify|status` manage it. Layout, rules and sizes are in [docs/DATA_STORE.md](docs/DATA_STORE.md). The app never commits for you: `git add store && git commit && git push`.
 
 ## Data sources and how they're used
 

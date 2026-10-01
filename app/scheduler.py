@@ -24,6 +24,7 @@ EXPECTED_INTERVAL_S = {
     "tilt_release": 86400,
     "model_predict": 600,
     "model_train": 86400,
+    "store_export": 86400,
 }
 
 _sched: BackgroundScheduler | None = None
@@ -39,6 +40,8 @@ def _next_train_delay() -> int:
 
 
 def _jobs():
+    from . import store
+    from .config import STORE_AUTOEXPORT
     from .episodes import catalog
     from .fetchers import comcat, fdsn_tremor, firms, hans, tilt_release, usgs_status, usgs_tilt, weather
     from .model import service
@@ -58,7 +61,7 @@ def _jobs():
         (service.predict_now, 600, 90),
         # daily, counted from the last actual training so restarts don't keep postponing it
         (service.train, 86400, _next_train_delay()),
-    ]
+    ] + ([(store.export_job, 86400, 900)] if STORE_AUTOEXPORT else [])
 
 
 def bootstrap() -> None:

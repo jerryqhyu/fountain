@@ -11,10 +11,10 @@ import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.model_selection import GroupKFold
 
-from .. import db
+from .. import db, store
 from ..analytics import tilt as tilt_an
 from ..analytics import tremor as tremor_an
-from ..config import DATA_DIR
+from ..config import DATA_DIR, STORE_AUTOEXPORT
 from ..episodes import catalog, suggest
 from ..fetchers.base import tracked
 from . import features as F
@@ -121,6 +121,11 @@ def train(do_eval: bool = True) -> str:
     prev_trained = (db.kv_get("model_meta") or {}).get("trained_at")
     joblib.dump({"hazard": hz, "ml": mlm, "meta": meta}, MODEL_DIR / "current.joblib")
     db.kv_set("model_meta", meta)
+    if STORE_AUTOEXPORT:
+        try:
+            store.register_model(MODEL_DIR / "current.joblib", meta)
+        except Exception as e:  # noqa: BLE001 - a store problem must never block serving
+            log.warning("model store registration failed: %s", e)
     global _cache
     _cache = None
     rebase_history(prev_trained)

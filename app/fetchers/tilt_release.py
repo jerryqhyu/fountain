@@ -98,7 +98,7 @@ def fetch(force: bool = False) -> str:
     for key, url in list_zip_urls():
         path = CACHE / key
         # The newest monthly file may be re-issued; refresh anything from the last 3 months.
-        if key in done and path.exists() and not force:
+        if key in done and not force:
             continue
         r = get(url, timeout=300)
         r.raise_for_status()
