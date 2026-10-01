@@ -1,0 +1,56 @@
+label,start_hst,end_hst,fountain_height_m,volume_mm3,notes
+1,"December 23, 2024 - 2:20 a.m.","December 23, 2024 - 4 p.m.",158.0,9.3,"Fissures open, eruption focuses on north and south vents"
+2,"December 24, 2024 - 8 a.m.","December 25, 2024 - 11 a.m.",95.0,4.7,Several vents reactivate
+3,"December 26, 2024 - 8 a.m.","January 3, 2025 - 8:30 p.m.",86.0,13.0,"Several vents reactivate, activity focuses at north and south vents"
+4,"January 15, 2025 - 9 a.m.","January 18, 2025 - 10:10 a.m.",95.0,6.5,North and south vents active
+5,"January 22, 2025 - 2:30 p.m.","January 23, 2025 - 4:30 a.m.",41.0,1.0,North vent active only
+6,"January 24, 2025 - 11:28 p.m.","January 25, 2025 - 12:36 p.m.",70.0,1.1,North vent active only
+7,"January 27, 2025 - 6:41 p.m.","January 28, 2025 - 10:41 a.m.",89.0,2.9,North and south vents active
+8,"February 3, 2025 - 9:52 p.m.","February 4, 2025 - 7:23 p.m.",114.0,4.6,North and south vents active
+9,"February 11, 2025 - 10:16 a.m.","February 12, 2025 - 8:43 a.m.",135.0,5.2,North and south vents active
+10,"February 19, 2025 - 8:22 p.m.","February 20, 2025 - 9:18 a.m.",146.0,2.5,North vent active only
+11,"February 25, 2025 - 6:26 p.m.","February 26, 2025 - 7:06 a.m.",157.0,4.0,North and south vents active
+12,"March 4, 2025 - 7:30 a.m.","March 5, 2025 - 10:37 a.m.",176.0,4.4,North and south vents active
+13,"March 11, 2025 - 2:36 a.m.","March 11, 2025 - 3:13 p.m.",215.0,5.5,North and south vents active
+14,"March 19, 2025 - 9:26 a.m.","March 20, 2025 - 1:49 p.m.",225.0,2.4,North and south vents active
+15,"March 25, 2025 - 12:04 p.m.","March 26, 2025 - 7:10 p.m.",322.0,3.6,North and south vents active; south vent inclined
+16,"March 31, 2025 - 10:57 p.m.","April 2, 2025 - 12:04 p.m.",326.0,6.0,"North and south vents active, south vent dominant"
+17,"April 7, 2025 - 10:15 p.m.","April 9, 2025 - 9:45 a.m.",73.0,3.9,North and south vents active
+18,"April 22, 2025 - 3:30 a.m.","April 22, 2025 - 1:28 p.m.",266.0,5.2,"Precursory low-level activity began on April 16, 2025 - 10:01 p.m.; north and south vents active, south vent dominant"
+19,"May 1, 2025 - 9:28 p.m.","May 2, 2025 - 5:20 a.m.",126.0,2.8,"Precursory low-level activity began on May 1, 2025 - 11:49 a.m.; north vent active only"
+20,"May 6, 2025 - 5:28 p.m.","May 6, 2025 - 9:28 p.m.",153.0,2.4,"Precursory low-level activity began on May 5, 2025 - 10:48 a.m.; north and south vents active, north vent dominant"
+21,"May 11, 2025 - 12:45 p.m.","May 11, 2025 - 8:36 p.m.",217.0,3.1,North vent primarily active
+22,"May 16, 2025 - 5:13 a.m.","May 16, 2025 - 3:29 p.m.",276.0,3.6,North vent active only
+23,"May 25, 2025 - 4:15 p.m.","May 25, 2025 - 10:25 p.m.",345.0,4.6,"North and south vents active, north vent dominant"
+24,"June 4, 2025 - 8:55 p.m.","June 5, 2025 - 4:28 a.m.",364.0,5.0,"North and south vents active, north vent dominant"
+25,"June 11, 2025 - 11:57 a.m.","June 11, 2025 - 8:08 p.m.",350.0,5.3,"North and south vents active, north vent dominant"
+26,"June 20, 2025 - 1:40 a.m.","June 20, 2025 - 10:25 a.m.",371.0,6.6,"North and south vents active, north vent dominant"
+27,"June 29, 2025 - 9:05 a.m.","June 29, 2025 - 7:54 p.m.",332.0,5.9,"North and south vents active, north vent dominant"
+28,"July 9, 2025 - 4:10 a.m.",July 9 - 1:20 p.m.,321.0,5.2,Only north vent active
+29,"July 20, 2025 - 5:15 a.m.",July 20 - 6:35 p.m.,63.0,6.7,"North and south vents active, north vent dominant"
+30,"August 6, 2025 - 1:20 a.m.","August 6, 2025 - 12:55 p.m.",52.0,7.9,"North and south vents active, north vent dominant; new vent in southwest wall"
+31,"August 22, 2025 - 2:04 p.m.","August 23, 2025 - 2:52 a.m.",88.0,7.6,North and south vents active; north vent dominant and inclined. Intermediate vents also active
+32,"September 2, 2025 - 6:35 a.m.","September 2, 2025 - 8:01 p.m.",101.0,9.0,"North, south, and intermediate vents active; north vent inclined"
+33,"September 19, 2025 - 3:11 a.m.","September 19, 2025 - 12:08 p.m.",249.0,5.7,North and south vents active; north vent inclined
+34,"October 1, 2025 - 12:53 a.m.","October 1, 2025 - 7:03 a.m.",383.0,9.0,North and south vents active; north vent inclined
+35,"October 17, 2025 - 8:05 p.m.","October 18, 2025 - 3:32 a.m.",479.0,10.2,North and south vents active; north vent inclined
+36,"November 9, 2025 - 11:15 a.m.","November 9, 2025 - 4:16 p.m.",386.0,8.1,"North and south vents active, as well as small vent area south of south vent; north vent inclined"
+37,"November 25, 2025 - 2:30 p.m.","November 25, 2025 - 11:39 p.m.",174.0,6.0,Fountains active at north vent active only; lava visible in south vent
+38,"December 6, 2025 - 8:45 a.m.","December 6, 2025 - 8:52 p.m.",384.0,12.1,North and south vents active; south vent dominant and inclined fountain
+39,"December 23, 2025 - 8:10 p.m.","December 24, 2025 - 2:13 a.m.",407.0,9.3,North and south vents active
+40,"January 12, 2026 - 8:22 a.m.","January 12, 2026 - 6:04 p.m.",250.0,5.5,North and south vents active; north vent dominant
+41,"January 24, 2026 - 11:10 a.m.","January 24, 2026 - 7:29 p.m.",450.0,10.6,North and south vents active
+42,"February 15, 2026 - 1:50 p.m.","February 15, 2026 - 11:38 p.m.",400.0,11.6,"North and south vents active, small intermediate fountain"
+43,"March 10, 2026 - 9:17 a.m.","March 10, 2026 - 6:21 p.m.",540.0,11.9,"North and south vents active, small intermediate fountain"
+44,"April 9, 2026 - 11:10 a.m.","April 9, 2026 - 7:41 p.m.",240.0,5.8,"North vent erupted fountain, though most precursory lava flows erupted from the south vent; small eq swarm and deformation on south rim"
+45,"April 23, 2026 - 1:34 a.m.","April 23, 2026 - 10:01 a.m.",265.0,5.2,North vent erupted lava fountain; precursory lava flows from both vents
+46,"May 5, 2026 - 8:17 a.m.","May 5, 2026 - 5:22 p.m.",200.0,4.6,North vent erupted lava fountain; precursory lava flows from both vents
+47,"May 14, 2026 - 3:27 p.m.","May 15, 2026 - 12:27 a.m.",200.0,5.2,North vent erupted lava fountain; precursory lava flows exclusively from the south vent.
+48,"June 1, 2026 - 4:40 a.m.","June 1, 2026 - 1:37 p.m.",200.0,5.7,North vent erupted lava fountain; precursory lava flows exclusively from the south vent. Small eq swarm and deformation on south rim.
+49,"June 14, 2026 - 9:36 a.m.","June 14, 2026 - 5:05 p.m.",210.0,5.0,Precursory lava flows from the north and south vents; north vent erupted lava fountain.
+50,"June 27, 2026 - 10:10 a.m.","June 27, 2026 - 5:10 p.m.",300.0,4.9,Precursory lava flows from the north vent; north vent erupted lava fountain.
+51,"July 15, 2026 - 8:30 a.m.","July 15, 2026 - 4:46 p.m.",290.0,5.1,Precursory lava flows from the north and south vents; north vent erupted lava fountain.
+52,"July 28, 2026 - 7:10 p.m.","July 29, 2026 - 2:36 a.m.",150.0,4.7,Precursory lava flows from the north vent; north vent erupted lava fountain.
+53,"August 12, 2026 - 3:45 p.m.","August 13, 2026 - 1:23 a.m.",150.0,4.6,"Precursory lava flows from north, south, and ""crack"" vents; north vent erupted lava fountain."
+54,"August 25, 2026 - 10:30 a.m.","August 25, 2026 - 7:33 p.m.",150.0,4.0,"Precursory lava flows from north, south; north vent erupted lava fountain."
+vents-20260914,"September 14, 2026 - 8:36 p.m.","September 16, 2026 - 8:30 p.m.",,0.4,Six new vents (1-6) opened in and near the base of the northwest wall of Halemaʻumaʻu crater; erupted lava flows on the crater floor without fountaining

@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kīlauea Fountaining Dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M3 27 L12.5 12 L15 15 L17 12.5 L29 27 Z" fill="currentColor" opacity=".9"/>
+        <path d="M14.2 9.5c.6-2 1.8-3.3 3.3-4.3M16.4 10.2c1.2-1.4 2.8-2.1 4.6-2.3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="title">Kīlauea</div>
+        <div class="subtitle">Halemaʻumaʻu fountaining monitor</div>
+      </div>
+    </div>
+    <div class="masthead-right">
+      <span id="refreshed" class="muted small">Loading…</span>
+      <button id="theme" class="icon-btn" title="Toggle light / dark" aria-label="Toggle light or dark theme">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ============ OFFICIAL ============ -->
+  <section class="section">
+    <div class="eyebrow-row">
+      <span class="eyebrow">Official · USGS Hawaiian Volcano Observatory</span>
+      <a class="quiet-link" href="https://www.usgs.gov/volcanoes/kilauea" target="_blank" rel="noopener">usgs.gov/volcanoes/kilauea ↗</a>
+    </div>
+
+    <div class="status-hero">
+      <div class="status-codes">
+        <div class="code">
+          <div class="code-label">Volcano Alert Level</div>
+          <div id="alert-level" class="code-value">—</div>
+        </div>
+        <div class="code">
+          <div class="code-label">Aviation Color Code</div>
+          <div id="color-code" class="code-value">—</div>
+        </div>
+      </div>
+      <div class="status-text">
+        <p id="status-synopsis" class="lede"></p>
+        <div id="status-date" class="muted small"></div>
+      </div>
+    </div>
+
+    <article class="notice">
+      <div class="notice-head">
+        <div>
+          <div class="eyebrow">Latest HVO notice</div>
+          <h3 id="notice-title">—</h3>
+          <div id="notice-time" class="muted small"></div>
+        </div>
+        <a id="notice-link" class="btn" href="#" target="_blank" rel="noopener">Open in HANS ↗</a>
+      </div>
+      <p id="notice-synopsis"></p>
+      <details>
+        <summary>Full notice text</summary>
+        <pre id="notice-text"></pre>
+      </details>
+      <details>
+        <summary>Earlier notices</summary>
+        <ul id="notice-list" class="notice-list"></ul>
+      </details>
+    </article>
+
+    <div class="freshness">
+      <span class="eyebrow">Data freshness</span>
+      <div id="freshness" class="chips"></div>
+    </div>
+  </section>
+
+  <!-- ============ PROBABILITY ============ -->
+  <section class="section">
+    <div class="eyebrow-row">
+      <span class="eyebrow">Custom analytics <span class="pill">experimental · unofficial</span></span>
+    </div>
+    <h2 class="section-title">Probability of a fountaining-episode onset</h2>
+
+    <div id="episode-banner" class="banner hidden"></div>
+
+    <div class="models">
+      <div class="model-card" id="card-hazard">
+        <div class="model-head">
+          <div>
+            <div class="model-name"><span class="swatch s1"></span>hazard-1.0</div>
+            <div class="model-desc">Survival model: hourly hazard from repose time and tilt recovery, projected forward</div>
+          </div>
+          <span class="model-trend" data-trend></span>
+        </div>
+        <div class="tiles" data-tiles></div>
+        <div class="factors">
+          <div class="eyebrow">What's driving it</div>
+          <ul data-factors></ul>
+          <div class="muted xsmall">Effect = change in log-odds of the hourly hazard vs. an average pause hour.</div>
+        </div>
+      </div>
+      <div class="model-card" id="card-ml">
+        <div class="model-head">
+          <div>
+            <div class="model-name"><span class="swatch s2"></span>ml-1.0</div>
+            <div class="model-desc">Gradient-boosted trees per horizon, calibrated on held-out eruption cycles</div>
+          </div>
+          <span class="model-trend" data-trend></span>
+        </div>
+        <div class="tiles" data-tiles></div>
+        <div class="factors">
+          <div class="eyebrow">What's driving it</div>
+          <ul data-factors></ul>
+          <div class="muted xsmall">Effect = change in 24 h probability if the feature were at its typical value.</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="prob-warnings" class="caveats hidden"></div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <details class="skill-details">
+      <summary>How good are these models? Out-of-sample, grouped by eruption cycle</summary>
+      <div id="skill"></div>
+    </details>
+    <p class="disclaimer" id="disclaimer"></p>
+  </section>
+
+  <!-- ============ CONTROLS (sticky) ============ -->
+  <div class="controls" id="controls">
+    <div class="control">
+      <span class="control-label">Time range</span>
+      <div class="seg" id="range" role="group" aria-label="Time range">
+        <button data-d="1">1 d</button>
+        <button data-d="7" class="on">7 d</button>
+        <button data-d="30">30 d</button>
+        <button data-d="90">90 d</button>
+        <button data-d="all" title="Since the series began (Dec 23, 2024)">All</button>
+      </div>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="episodes-toggle">
+      <span class="track"><span class="thumb"></span></span>
+      <span>Show eruption episodes</span>
+    </label>
+  </div>
+
+  <!-- ============ TIMESERIES ============ -->
+  <section class="section">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Onset probability over time</h3>
+          <div class="muted small" id="prob-note"></div>
+        </div>
+        <div class="head-controls">
+          <div class="legend">
+            <span><i class="swatch s1"></i>hazard-1.0</span>
+            <span><i class="swatch s2"></i>ml-1.0</span>
+          </div>
+          <div class="seg small" id="horizon" role="group" aria-label="Forecast horizon">
+            <button data-h="12">12 h</button><button data-h="24" class="on">24 h</button><button data-h="72">72 h</button>
+          </div>
+        </div>
+      </div>
+      <div id="chart-prob" class="chart"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Summit tilt</h3>
+          <div class="muted small">UWD, azimuth 300° (radial) · µrad · up = inflation</div>
+        </div>
+      </div>
+      <div id="chart-tilt" class="chart"></div>
+      <div class="panel-sub">
+        <h4>Tilt rate</h4><span class="muted small">µrad/h, 3 h least-squares fit</span>
+      </div>
+      <div id="chart-rate" class="chart short"></div>
+      <p class="note" id="tilt-note"></p>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h3>Seismic tremor</h3>
+            <div class="muted small">RSAM · HV.UWE HHZ · 1–5 Hz · 10-min mean |v|</div>
+          </div>
+        </div>
+        <div id="chart-tremor" class="chart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h3>Earthquakes</h3>
+            <div class="muted small" id="eq-bin-note">events per day, by region</div>
+          </div>
+          <div class="legend">
+            <span><i class="swatch s1"></i>Summit</span><span><i class="swatch s2"></i>Upper East Rift</span>
+            <span><i class="swatch s3"></i>Southwest Rift</span><span><i class="swatch s4"></i>Other</span>
+          </div>
+        </div>
+        <div id="chart-eq" class="chart"></div>
+        <p class="note" id="eq-summary"></p>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h3>Inflation since the last episode</h3>
+            <div class="muted small">vs. tilt regained at past onsets</div>
+          </div>
+        </div>
+        <div id="chart-infl" class="chart"></div>
+        <p class="note" id="infl-note"></p>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h3>Summit conditions</h3><div class="muted small">Open-Meteo · NASA FIRMS</div></div></div>
+        <div id="weather" class="kpis compact"></div>
+        <div class="panel-sub"><h4>Satellite thermal detections</h4></div>
+        <div id="firms" class="small"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ EPISODES ============ -->
+  <section class="section">
+    <div class="eyebrow-row">
+      <span class="eyebrow">Record</span>
+      <a class="quiet-link" href="https://www.usgs.gov/volcanoes/kilauea/science/eruption-information" target="_blank" rel="noopener">source: USGS eruption information ↗</a>
+    </div>
+    <h2 class="section-title">Episode history</h2>
+    <div id="suggestions"></div>
+    <div class="panel flush">
+      <div class="table-wrap">
+        <table id="episodes">
+          <thead><tr>
+            <th>#</th><th>Start (HST)</th><th class="num">Duration</th><th class="num">Pause before</th><th class="num">Onset interval</th>
+            <th class="num">Deflation</th><th class="num">Recovery at onset</th><th class="num">Fountain</th><th class="notes">Notes</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    Data: USGS Volcano Hazards Program (Volcano API, HANS), USGS ComCat, USGS ScienceBase tilt releases,
+    HVO tilt plots, EarthScope FDSN (HV network), NASA FIRMS, Open-Meteo. Not affiliated with the USGS.
+    For official information follow the <a href="https://www.usgs.gov/observatories/hvo" target="_blank" rel="noopener">Hawaiian Volcano Observatory</a>.
+  </footer>
+</main>
+</body>
+</html>
