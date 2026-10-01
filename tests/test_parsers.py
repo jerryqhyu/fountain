@@ -4,12 +4,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from app.analytics import digitize
+from app import digitize
 from app.config import HST
 from app.episodes.catalog import parse_hst
 from app.episodes.suggest import classify
-from app.fetchers.tilt_release import az_component
-from app.model.features import labels
+from app.sources.tilt_release import az_component
+from app.model.service import labels
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -45,7 +45,7 @@ def test_digitize_month_plot():
 
 
 def test_labels_censoring():
-    df = pd.DataFrame({"t": [0, 3600, 7200], "next_onset": [5 * 3600, np.nan, np.nan]})
+    df = pd.DataFrame({"next_onset": [5 * 3600, np.nan, np.nan]}, index=[0, 3600, 7200])
     y = labels(df, 12, now=12 * 3600 + 3600)
     assert y[0] == 1.0          # onset 5 h later
     assert y[1] == 0.0          # 12 h elapsed with no onset

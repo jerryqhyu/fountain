@@ -22,7 +22,7 @@ from datetime import datetime
 import numpy as np
 from PIL import Image
 
-from ..config import HST
+from .config import HST
 
 try:
     import pytesseract

@@ -11,7 +11,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import GroupKFold
 
-from .features import FEATURES
+from ..frame import FEATURES
 
 VERSION = "ml-1.0"
 
@@ -48,7 +48,14 @@ class MLModel:
 
     def predict(self, df: pd.DataFrame) -> dict[int, np.ndarray]:
         X = df[FEATURES].to_numpy(float)
-        return {H: self.iso_[H].predict(self.models_[H].predict_proba(X)[:, 1]) for H in self.horizons}
+        out = {H: self.iso_[H].predict(self.models_[H].predict_proba(X)[:, 1]) for H in self.horizons}
+        # horizons are fitted separately; P(onset within H) must not decrease with H
+        prev = None
+        for H in sorted(self.horizons):
+            if prev is not None:
+                out[H] = np.maximum(out[H], prev)
+            prev = out[H]
+        return out
 
     def contributions(self, row: pd.DataFrame, H: int = 24) -> dict[str, float]:
         """Change in P(onset within H) when each feature is replaced by its training median."""

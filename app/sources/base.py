@@ -1,4 +1,4 @@
-"""Shared plumbing for fetchers: HTTP client, retry, health bookkeeping."""
+"""Shared plumbing for sources: HTTP client, retry, health bookkeeping."""
 from __future__ import annotations
 
 import functools
@@ -12,7 +12,7 @@ import httpx
 from .. import db
 from ..config import USER_AGENT
 
-log = logging.getLogger("fetchers")
+log = logging.getLogger("sources")
 
 _client: httpx.Client | None = None
 

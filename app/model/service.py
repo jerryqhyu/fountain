@@ -1,7 +1,11 @@
-"""Train, evaluate, and serve the onset-probability models."""
+"""Train both models on the feature frame and run them over the grid.
+
+Predictions are frames with the same layout for both models: pred_<model>(t, p12, p24, p72),
+one row per 5-minute slot. A slot is NULL when an episode is under way or when any input the
+model requires is genuinely missing (no imputation).
+"""
 from __future__ import annotations
 
-import json
 import logging
 import time
 
@@ -11,75 +15,75 @@ import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.model_selection import GroupKFold
 
-from .. import db
-from ..analytics import tilt as tilt_an
-from ..analytics import tremor as tremor_an
+from .. import db, frame
 from ..config import DATA_DIR
-from ..episodes import catalog, suggest
-from ..fetchers.base import tracked
-from . import features as F
-from .hazard import HazardModel
+from ..frame import FEATURES, LABELS
+from ..sources.base import tracked
+from .hazard import GROUPS, HazardModel
 from .ml import MLModel
 
 log = logging.getLogger("model")
 HORIZONS = (12, 24, 72)
 MODEL_DIR = DATA_DIR / "models"
 MODEL_DIR.mkdir(exist_ok=True)
-FIRST_TRAIN_EPISODE = 4  # episodes 1–3 were a different (long/continuous) style
+FIRST_TRAIN_EPISODE = 4  # episodes 1–3 were long/continuous, a different style
+REQUIRED = {"hazard": list(GROUPS), "ml": list(FEATURES)}
+PRED_TABLE = {"hazard": "pred_hazard", "ml": "pred_ml"}
 
 
-def training_frame(now: int | None = None) -> tuple[pd.DataFrame, dict]:
-    now = int(now or time.time())
-    eps = F.episode_table()
-    ep4 = eps[eps["num"] == FIRST_TRAIN_EPISODE].iloc[0]
-    t0 = int(np.ceil(ep4["end"] / 3600) * 3600)
-    times = np.arange(t0, now - 3600, 3600, dtype=np.int64)
-    df = F.build(times, eps)
-    df = df[~df["in_episode"] & df["hours_since_end"].notna()].reset_index(drop=True)
-    ys = {H: F.labels(df, H, now) for H in (1,) + HORIZONS}
-    return df, ys
+# ------------------------------------------------------------------ training
+def labels(df: pd.DataFrame, horizon_h: float, now: int) -> np.ndarray:
+    """1 if the next onset is within (t, t+H]; 0 if not; NaN if not yet knowable."""
+    h = horizon_h * 3600
+    t = df.index.to_numpy(float)
+    nxt = df["next_onset"].to_numpy(float)
+    y = np.full(len(df), np.nan)
+    known = ~np.isnan(nxt)
+    y[known] = ((nxt[known] - t[known]) <= h).astype(float)
+    y[~known & (t + h <= now)] = 0.0
+    return y
+
+
+def training_frame(now: int) -> tuple[pd.DataFrame, dict]:
+    df = frame.load()
+    ep4 = db.query_one("SELECT end_t FROM episodes WHERE num=?", (FIRST_TRAIN_EPISODE,))["end_t"]
+    df = df[(df.index % 3600 == 0) & (df.index > ep4) & (df.index < now - 3600)]
+    df = df[(df["in_episode"] == 0) & df[FEATURES].notna().all(axis=1)].copy()
+    df["cycle"] = df["last_label"].astype(str)
+    return df, {H: labels(df, H, now) for H in (1,) + HORIZONS}
 
 
 def _metrics(y: np.ndarray, p: np.ndarray, base_rate: float) -> dict:
     ok = ~np.isnan(y) & ~np.isnan(p)
     y, p = y[ok].astype(int), np.clip(p[ok], 1e-4, 1 - 1e-4)
-    if len(y) == 0:
+    if not len(y):
         return {}
-    b = brier_score_loss(y, p)
-    bc = brier_score_loss(y, np.full(len(y), base_rate))
+    b, bc = brier_score_loss(y, p), brier_score_loss(y, np.full(len(y), base_rate))
     out = {"n": int(len(y)), "positives": int(y.sum()), "brier": round(float(b), 4),
            "brier_climatology": round(float(bc), 4),
            "brier_skill": round(float(1 - b / bc), 3) if bc > 0 else None,
            "log_loss": round(float(log_loss(y, p, labels=[0, 1])), 4)}
     if 0 < y.sum() < len(y):
         out["auc"] = round(float(roc_auc_score(y, p)), 3)
-    # reliability (5 bins)
-    bins = np.clip((p * 5).astype(int), 0, 4)
-    out["reliability"] = [
-        {"bin": f"{i*20}-{(i+1)*20}%", "n": int((bins == i).sum()),
-         "mean_pred": round(float(p[bins == i].mean()), 3) if (bins == i).any() else None,
-         "observed": round(float(y[bins == i].mean()), 3) if (bins == i).any() else None}
-        for i in range(5)]
     return out
 
 
 def evaluate(df: pd.DataFrame, ys: dict, n_splits: int = 8) -> dict:
+    """Out-of-fold skill, grouped by eruption cycle; reported for completed cycles and all."""
     groups = df["cycle"].to_numpy()
-    oof = {m: {H: np.full(len(df), np.nan) for H in HORIZONS} for m in ("hazard", "ml")}
-    base = {H: [] for H in HORIZONS}
+    oof = {m: {H: np.full(len(df), np.nan) for H in HORIZONS} for m in PRED_TABLE}
     for tr, te in GroupKFold(n_splits=n_splits).split(df, groups=groups):
         dtr, dte = df.iloc[tr], df.iloc[te]
-        y1 = ys[1][tr]
-        ok = ~np.isnan(y1)
-        hz = HazardModel().fit(dtr[ok], y1[ok])
+        ok = ~np.isnan(ys[1][tr])
+        hz = HazardModel().fit(dtr[ok], ys[1][tr][ok])
         for H, p in hz.predict(dte, HORIZONS).items():
             oof["hazard"][H][te] = p
         mlm = MLModel(HORIZONS).fit(dtr, {H: ys[H][tr] for H in HORIZONS}, groups[tr])
         for H, p in mlm.predict(dte).items():
             oof["ml"][H][te] = p
-    res = {}
-    open_cycle = df["cycle"].max()
+    open_cycle = df["cycle"].iloc[-1]
     closed = (df["cycle"] != open_cycle).to_numpy() if np.isnan(df["next_onset"].iloc[-1]) else np.ones(len(df), bool)
+    res = {}
     for m in oof:
         res[m] = {"all": {}, "closed": {}}
         for H in HORIZONS:
@@ -90,48 +94,36 @@ def evaluate(df: pd.DataFrame, ys: dict, n_splits: int = 8) -> dict:
     return res
 
 
-@tracked("model_train")
-def train(do_eval: bool = True) -> str:
+@tracked("train")
+def train() -> str:
     t_start = time.time()
-    now = int(time.time())
+    now = int(t_start)
     df, ys = training_frame(now)
-    y1 = ys[1]
-    ok = ~np.isnan(y1)
-    hz = HazardModel().fit(df[ok], y1[ok])
+    ok = ~np.isnan(ys[1])
+    hz = HazardModel().fit(df[ok], ys[1][ok])
     mlm = MLModel(HORIZONS).fit(df, {H: ys[H] for H in HORIZONS}, df["cycle"].to_numpy())
-    metrics = evaluate(df, ys) if do_eval else db.kv_get("model_meta", {}).get("metrics")
     onset_rows = df[ys[1] == 1]
     meta = {
         "trained_at": now,
-        "n_rows": int(len(df)),
-        "n_onsets": int(np.nansum(ys[1])),
-        "cycles": int(df["cycle"].nunique()),
-        "train_start": int(df["t"].min()),
-        "metrics": metrics,
-        "feature_ranges_at_onset": {
-            f: [float(onset_rows[f].min()), float(onset_rows[f].max())]
-            for f in F.FEATURES if onset_rows[f].notna().any()
-        },
-        "feature_ranges_all": {
-            f: [float(df[f].min()), float(df[f].max())] for f in F.FEATURES if df[f].notna().any()
-        },
+        "n_rows": int(len(df)), "n_onsets": int(np.nansum(ys[1])), "cycles": int(df["cycle"].nunique()),
+        "train_start": int(df.index.min()),
+        "metrics": evaluate(df, ys),
+        "feature_ranges_at_onset": {f: [float(onset_rows[f].min()), float(onset_rows[f].max())]
+                                    for f in FEATURES if onset_rows[f].notna().any()},
         "versions": {"hazard": hz.version, "ml": mlm.version},
+        "required": REQUIRED,
         "train_seconds": round(time.time() - t_start, 1),
     }
-    prev_trained = (db.kv_get("model_meta") or {}).get("trained_at")
     joblib.dump({"hazard": hz, "ml": mlm, "meta": meta}, MODEL_DIR / "current.joblib")
     db.kv_set("model_meta", meta)
-    global _cache
-    _cache = None
-    rebase_history(prev_trained)
-    return f"{meta['n_rows']} rows, {meta['n_onsets']} onsets, {meta['train_seconds']} s"
+    return f"{meta['n_rows']} hourly rows, {meta['n_onsets']} onsets, {meta['train_seconds']} s"
 
 
 _cache: dict | None = None
 
 
 def models() -> dict | None:
-    """Load the current model bundle, reloading if another process retrained it."""
+    """Current model bundle, reloaded if another process retrained it."""
     global _cache
     p = MODEL_DIR / "current.joblib"
     if not p.exists():
@@ -143,40 +135,56 @@ def models() -> dict | None:
     return _cache
 
 
+# ------------------------------------------------------------------ inference
+def valid_mask(df: pd.DataFrame, model: str) -> np.ndarray:
+    return ((df["in_episode"] == 0) & df[REQUIRED[model]].notna().all(axis=1)).to_numpy()
+
+
+@tracked("infer")
+def infer(t0: int | None = None) -> str:
+    m = models()
+    if m is None:
+        raise RuntimeError("no trained model yet")
+    df = frame.load(t0)
+    if df.empty:
+        return "no frame rows"
+    df[FEATURES] = df[FEATURES].astype(float)
+    out = []
+    for name in PRED_TABLE:
+        ok = valid_mask(df, name)
+        p = {H: np.full(len(df), np.nan) for H in HORIZONS}
+        idx = np.where(ok)[0]
+        for c in range(0, len(idx), 5000):  # hazard projects 72 h per row: chunk to bound memory
+            sel = idx[c:c + 5000]
+            res = m[name].predict(df.iloc[sel], HORIZONS) if name == "hazard" else m[name].predict(df.iloc[sel])
+            for H in HORIZONS:
+                p[H][sel] = res[H]
+        rows = [(int(t), *[None if np.isnan(p[H][i]) else float(p[H][i]) for H in HORIZONS])
+                for i, t in enumerate(df.index)]
+        db.upsert(PRED_TABLE[name], ["t", "p12", "p24", "p72"], rows)
+        out.append(f"{name}: {int(ok.sum())}/{len(df)} slots valid")
+    return "; ".join(out)
+
+
+def predictions(model: str, t0: int, t1: int | None = None) -> pd.DataFrame:
+    rows = db.query(f"SELECT t, p12, p24, p72 FROM {PRED_TABLE[model]} WHERE t>=? AND t<=? ORDER BY t",
+                    (t0, t1 or 2**62))
+    return pd.DataFrame(rows, columns=["t", "p12", "p24", "p72"])
+
+
+# ------------------------------------------------------------------ latest, for the cards
 def _episode_in_progress(row: pd.Series) -> tuple[bool, str | None]:
     open_ev = db.query_one("SELECT label FROM episodes WHERE end_t IS NULL ORDER BY start_t DESC LIMIT 1")
     if open_ev:
         return True, f"catalog lists episode {open_ev['label']} without an end time"
-    last_num = db.query_one("SELECT MAX(num) AS n FROM episodes WHERE kind='fountaining'")["n"] or 0
-    sug = db.query(
-        "SELECT episode_num, phase, sent_unix FROM episode_suggestions WHERE episode_num > ? ORDER BY sent_unix",
-        (last_num,))
-    started = [s for s in sug if s["phase"] == "onset"]
-    ended = [s for s in sug if s["phase"] == "end"]
-    if started and (not ended or ended[-1]["sent_unix"] < started[-1]["sent_unix"]):
-        return True, f"HVO notice reports episode {started[-1]['episode_num']} began"
-    rate = row.get("tilt_rate_6h")
-    rr = row.get("rsam_ratio_log")
-    if pd.notna(rate) and pd.notna(rr) and rate < -0.8 and rr > np.log10(3):
+    if pd.notna(row.get("tilt_rate_6h")) and pd.notna(row.get("rsam_ratio_log")) \
+            and row["tilt_rate_6h"] < -0.8 and row["rsam_ratio_log"] > np.log10(3):
         return True, "rapid summit deflation with a tremor surge (signal-based detection)"
     return False, None
 
 
-def _freshness(now: int) -> dict:
-    tl = db.query_one("SELECT MAX(t) AS t FROM tilt")["t"]
-    rs = db.query_one("SELECT MAX(t) AS t FROM rsam")["t"]
-    eq = db.query_one("SELECT last_success AS t FROM source_health WHERE source='comcat'")
-    nt = db.query_one("SELECT last_success AS t FROM source_health WHERE source='hans'")
-    return {
-        "tilt_latest": tl, "tilt_age_min": round((now - tl) / 60, 1) if tl else None,
-        "rsam_latest": (rs + 600) if rs else None, "rsam_age_min": round((now - rs - 600) / 60, 1) if rs else None,
-        "quakes_checked": eq["t"] if eq else None, "notices_checked": nt["t"] if nt else None,
-    }
-
-
-def _ood(row: pd.Series, meta: dict) -> list[str]:
+def _warnings(row: pd.Series, meta: dict) -> list[str]:
     notes = []
-    rng = meta.get("feature_ranges_at_onset", {})
     rr = row.get("recovery_ratio")
     past = db.query("SELECT label, onset_recovery_ratio AS r FROM episodes WHERE kind='fountaining' "
                     "AND onset_recovery_ratio IS NOT NULL")
@@ -185,168 +193,62 @@ def _ood(row: pd.Series, meta: dict) -> list[str]:
         frac = 1 - len(above) / len(past)
         if frac >= 0.95:
             notes.append(
-                f"Tilt has recovered {rr:.2f}× the last episode's deflation, more than at {frac:.0%} of past "
-                f"onsets (typical 0.9–1.15×{'; only episode ' + ', '.join(above) + ' was higher' if above else ''}). "
+                f"Tilt has recovered {rr:.2f}× the last episode's deflation, more than at {frac:.0%} of past onsets "
+                f"(typical 0.9–1.15×{'; only episode ' + ', '.join(above) + ' was higher' if above else ''}). "
                 "The usual tilt threshold hasn't produced an onset this time, so both models are extrapolating.")
+    rng = meta.get("feature_ranges_at_onset", {})
     hs = row.get("hours_since_end")
     if pd.notna(hs) and "hours_since_end" in rng and hs > rng["hours_since_end"][1]:
-        notes.append(
-            f"This pause ({hs/24:.1f} d) is longer than any previous pause "
-            f"(max {rng['hours_since_end'][1]/24:.1f} d).")
-    since = row.get("last_end")
-    if pd.notna(since):
-        ev = db.query("SELECT label, notes FROM episodes WHERE kind='non_fountaining' AND start_t > ?", (int(since),))
-        for e in ev:
+        notes.append(f"This pause ({hs / 24:.1f} d) is longer than any previous pause "
+                     f"(max {rng['hours_since_end'][1] / 24:.1f} d).")
+    if pd.notna(row.get("last_end")):
+        for e in db.query("SELECT label, notes FROM episodes WHERE kind='non_fountaining' AND start_t > ?",
+                          (int(row["last_end"]),)):
             notes.append(f"Non-fountaining eruptive event since the last episode ({e['label']}): {e['notes']}")
     return notes
 
 
-def _trend(model: str, p24: float, now: int) -> dict:
-    out = {}
-    for hrs in (6, 24):
-        r = db.query_one("SELECT p24 FROM probability_log WHERE model=? AND t<=? ORDER BY t DESC LIMIT 1",
-                         (model, now - hrs * 3600))
-        if r and r["p24"] is not None:
-            out[f"delta_{hrs}h"] = round(p24 - r["p24"], 4)
-    d = out.get("delta_6h", 0.0)
-    out["arrow"] = "up" if d > 0.02 else ("down" if d < -0.02 else "flat")
-    return out
-
-
-MAX_INPUT_AGE_S = 45 * 60
-
-
-def _input_ages(t: int) -> dict[str, float]:
-    tl = db.query_one("SELECT MAX(t) AS t FROM tilt")["t"] or 0
-    rs = db.query_one("SELECT MAX(t) AS t FROM rsam")["t"] or 0
-    return {"tilt": t - tl, "rsam": t - rs}
-
-
-def _ensure_fresh_inputs(t: int) -> None:
-    """Never predict from stale tilt/tremor (e.g. right after the Mac wakes, before the fetch
-    jobs have run): those features would come out blank and the number would be meaningless."""
-    stale = [k for k, age in _input_ages(t).items() if age > MAX_INPUT_AGE_S]
-    if not stale:
-        return
-    from ..fetchers import fdsn_tremor, usgs_tilt
-
-    if "tilt" in stale:
-        usgs_tilt.fetch_fast()
-    if "rsam" in stale:
-        fdsn_tremor.fetch()
-    ages = _input_ages(t)
-    still = {k: round(a / 60) for k, a in ages.items() if a > MAX_INPUT_AGE_S}
-    if still:
-        raise RuntimeError(f"inputs too old to predict (minutes): {still}; keeping the last prediction")
-
-
-@tracked("model_predict")
-def predict_now() -> str:
-    m = models()
-    if m is None:
-        raise RuntimeError("no trained model yet")
-    now = int(time.time())
-    t = (now // 600) * 600
-    _ensure_fresh_inputs(t)
-    row_df = F.build(np.array([t]))
-    row = row_df.iloc[0]
-    meta = m["meta"]
-    in_ep, why = _episode_in_progress(row)
-    hz, mlm = m["hazard"], m["ml"]
-    ph = {H: float(v[0]) for H, v in hz.predict(row_df, HORIZONS).items()}
-    pm = {H: float(v[0]) for H, v in mlm.predict(row_df).items()}
-    feats = {f: (None if pd.isna(row[f]) else float(row[f])) for f in F.FEATURES}
-
-    def top(contrib: dict, unit: str) -> list[dict]:
-        items = sorted(contrib.items(), key=lambda kv: -abs(kv[1]))[:5]
-        return [{"feature": k, "label": F.LABELS.get(k, k), "value": feats.get(k), "effect": round(v, 4),
-                 "direction": "raises" if v > 0 else "lowers", "unit": unit} for k, v in items if abs(v) > 1e-6]
-
-    common = {
-        "t": t, "in_episode": in_ep, "in_episode_reason": why, "features": feats,
-        "last_episode": row["last_label"], "hours_since_last_end": feats["hours_since_end"],
-        "warnings": _ood(row, meta), "freshness": _freshness(now),
-    }
-    out = {}
-    for name, p, model, contrib, unit in (
-        ("hazard", ph, hz, hz.contributions(row_df), "log-odds of hourly hazard"),
-        ("ml", pm, mlm, mlm.contributions(row_df, 24), "Δ P(24 h)"),
-    ):
-        payload = {**common, "model": name, "version": model.version,
-                   "p": {str(H): round(p[H], 4) for H in HORIZONS},
-                   "top_factors": top(contrib, unit), "trend": _trend(name, p[24], t)}
-        out[name] = payload
-        with db.tx() as c:
-            c.execute("INSERT OR REPLACE INTO probability_log(t,model,version,p12,p24,p72,payload) VALUES(?,?,?,?,?,?,?)",
-                      (t, name, model.version, p[12], p[24], p[72], json.dumps(payload, default=str)))
-    return f"hazard p24={ph[24]:.3f}, ml p24={pm[24]:.3f}"
-
-
 def latest() -> dict:
-    out = {}
-    for name in ("hazard", "ml"):
-        r = db.query_one("SELECT payload FROM probability_log WHERE model=? AND payload NOT LIKE '{\"hindcast\"%' "
-                         "ORDER BY t DESC LIMIT 1", (name,))
-        if r:
-            out[name] = json.loads(r["payload"])
-    meta = db.kv_get("model_meta", {})
-    return {"primary": "hazard", "models": out, "training": {k: meta.get(k) for k in (
-        "trained_at", "n_rows", "n_onsets", "cycles", "train_start", "metrics", "versions")}}
-
-
-def rebase_history(prev_trained_at: int | None = None) -> int:
-    """Redraw the probability history with the current model so the curve is continuous.
-
-    Values the previous model showed live are moved to probability_archive; then every hour of
-    the history window is recomputed with the current model. Left of its training time the
-    result is in-sample; right of it the model is predicting data it never saw.
-    """
-    with db.tx() as c:
-        c.execute(
-            "INSERT OR IGNORE INTO probability_archive(t,model,version,trained_at,p12,p24,p72,payload) "
-            "SELECT t, model, version, ?, p12, p24, p72, payload FROM probability_log "
-            "WHERE payload NOT LIKE '{\"hindcast\"%'", (prev_trained_at or 0,))
-        c.execute("DELETE FROM probability_log")
-    n = hindcast()
-    predict_now()  # the cards read the latest live row; don't leave them empty until the next run
-    return n
-
-
-def history(hours: int = 168) -> list[dict]:
-    """Logged probabilities; `hindcast`=1 marks values recomputed with the current model (in-sample)."""
-    t0 = int(time.time()) - hours * 3600
-    return db.query(
-        "SELECT t, model, p12, p24, p72, (payload LIKE '{\"hindcast\"%') AS hindcast "
-        "FROM probability_log WHERE t>=? ORDER BY t", (t0,))
-
-
-def hindcast(hours: int | None = None, step_s: int = 3600) -> int:
-    """Fill probability_log with the current models, back to the end of the series' first
-    episode by default (earlier there is no completed cycle to measure from)."""
     m = models()
-    if m is None:
-        return 0
-    now = int(time.time())
-    if hours is None:
-        first = db.query_one("SELECT MIN(end_t) AS t FROM episodes WHERE kind='fountaining'")["t"]
-        t0 = int(first) if first else now - 95 * 86400
-    else:
-        t0 = now - hours * 3600
-    times = np.arange(((t0 // step_s) + 1) * step_s, now - 600, step_s, dtype=np.int64)
-    have = {r["t"] for r in db.query("SELECT DISTINCT t FROM probability_log WHERE t>=?", (int(times[0]),))}
-    times = np.array([t for t in times if int(t) not in have], dtype=np.int64)
-    if not len(times):
-        return 0
-    df = F.build(times)
-    ph = m["hazard"].predict(df, HORIZONS)
-    pm = m["ml"].predict(df)
-    rows = []
-    for i, t in enumerate(times):
-        for name, p, ver in (("hazard", ph, m["hazard"].version), ("ml", pm, m["ml"].version)):
-            vals = [float(p[H][i]) for H in HORIZONS]
-            if bool(df["in_episode"].iloc[i]):
-                continue
-            rows.append((int(t), name, ver, *vals, json.dumps({"hindcast": True, "p": dict(zip(map(str, HORIZONS), vals))})))
-    with db.tx() as c:
-        c.executemany("INSERT OR IGNORE INTO probability_log(t,model,version,p12,p24,p72,payload) VALUES(?,?,?,?,?,?,?)", rows)
-    return len(rows)
+    meta = (m or {}).get("meta") or db.kv_get("model_meta", {}) or {}
+    fr = frame.load(int(time.time()) - 2 * 86400)
+    if m is None or fr.empty:
+        return {"models": {}, "training": meta}
+    fr[FEATURES] = fr[FEATURES].astype(float)
+    newest = fr.iloc[-1]
+    out = {}
+    for name in PRED_TABLE:
+        pr = predictions(name, int(fr.index[0])).dropna()
+        missing = [f for f in REQUIRED[name] if pd.isna(newest[f])]
+        if pr.empty:
+            out[name] = {"version": meta["versions"][name], "p": None, "missing_now": missing}
+            continue
+        last = pr.iloc[-1]
+        t = int(last["t"])
+        row = fr.loc[[t]]
+        if name == "hazard":
+            contrib, unit = m["hazard"].contributions(row), "log-odds of hourly hazard"
+        else:
+            contrib, unit = m["ml"].contributions(row, 24), "Δ P(24 h)"
+        feats = {f: (None if pd.isna(row.iloc[0][f]) else float(row.iloc[0][f])) for f in FEATURES}
+        top = sorted(contrib.items(), key=lambda kv: -abs(kv[1]))[:5]
+        trend = {}
+        for hrs in (6, 24):
+            prev = pr[pr["t"] <= t - hrs * 3600]
+            if len(prev):
+                trend[f"delta_{hrs}h"] = round(float(last["p24"] - prev.iloc[-1]["p24"]), 4)
+        d6 = trend.get("delta_6h", 0.0)
+        trend["arrow"] = "up" if d6 > 0.02 else ("down" if d6 < -0.02 else "flat")
+        in_ep, why = _episode_in_progress(row.iloc[0])
+        out[name] = {
+            "version": meta["versions"][name], "t": t, "p": {str(H): float(last[f"p{H}"]) for H in HORIZONS},
+            "trend": trend, "features": feats, "last_episode": row.iloc[0]["last_label"],
+            "top_factors": [{"feature": k, "label": LABELS.get(k, k), "value": feats.get(k), "effect": round(v, 4),
+                             "unit": unit} for k, v in top if abs(v) > 1e-6],
+            "warnings": _warnings(row.iloc[0], meta), "in_episode": in_ep, "in_episode_reason": why,
+            # the newest grid slot may be NULL if an input hasn't arrived yet
+            "newest_slot": int(fr.index[-1]), "missing_now": missing,
+        }
+    return {"primary": "hazard", "models": out,
+            "training": {k: meta.get(k) for k in ("trained_at", "n_rows", "n_onsets", "cycles", "train_start",
+                                                  "metrics", "versions", "required")}}

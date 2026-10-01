@@ -76,10 +76,16 @@
       </details>
     </article>
 
-    <div class="freshness">
-      <span class="eyebrow">Data freshness</span>
-      <div id="freshness" class="chips"></div>
-    </div>
+    <article class="notice">
+      <div class="notice-head">
+        <div>
+          <div class="eyebrow">Kīlauea messages</div>
+          <div class="muted small">HVO posts these between Daily Updates when activity changes</div>
+        </div>
+        <a id="messages-link" class="btn" href="https://www.usgs.gov/observatories/hvo/observatory-messages" target="_blank" rel="noopener">All messages ↗</a>
+      </div>
+      <ol id="messages" class="messages"></ol>
+    </article>
   </section>
 
   <!-- ============ PROBABILITY ============ -->
@@ -101,6 +107,7 @@
           <span class="model-trend" data-trend></span>
         </div>
         <div class="tiles" data-tiles></div>
+        <div class="muted xsmall" data-lag></div>
         <div class="factors">
           <div class="eyebrow">What's driving it</div>
           <ul data-factors></ul>
@@ -116,6 +123,7 @@
           <span class="model-trend" data-trend></span>
         </div>
         <div class="tiles" data-tiles></div>
+        <div class="muted xsmall" data-lag></div>
         <div class="factors">
           <div class="eyebrow">What's driving it</div>
           <ul data-factors></ul>
@@ -178,11 +186,25 @@
     <div class="panel">
       <div class="panel-head">
         <div>
-          <h3>Summit tilt</h3>
-          <div class="muted small">UWD, azimuth 300° (radial) · µrad · up = inflation</div>
+          <h3>Model inputs</h3>
+          <div class="muted small" id="inputs-note">Latest row of the 5-minute feature frame. A model outputs None when any input it requires is missing.</div>
         </div>
       </div>
-      <div id="chart-tilt" class="chart"></div>
+      <div class="table-wrap"><table id="inputs" class="inputs"><thead><tr>
+        <th>Feature</th><th class="num">Value</th><th>hazard-1.0</th><th>ml-1.0</th><th>Built from</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Summit tilt</h3>
+          <div class="muted small">UWD, azimuth 300° (radial) · µrad · up = inflation · thick = stitched series used by the models</div>
+        </div>
+        <div class="legend" id="tilt-legend"></div>
+      </div>
+      <div id="chart-tilt" class="chart tall"></div>
+      <div class="sources-table" id="tilt-sources"></div>
       <div class="panel-sub">
         <h4>Tilt rate</h4><span class="muted small">µrad/h, 3 h least-squares fit</span>
       </div>
@@ -195,10 +217,12 @@
         <div class="panel-head">
           <div>
             <h3>Seismic tremor</h3>
-            <div class="muted small">RSAM · HV.UWE HHZ · 1–5 Hz · 10-min mean |v|</div>
+            <div class="muted small">RSAM · 1–5 Hz · 10-min mean |v| · µm/s · thick = stitched</div>
           </div>
+          <div class="legend" id="tremor-legend"></div>
         </div>
         <div id="chart-tremor" class="chart"></div>
+        <div class="sources-table" id="tremor-sources"></div>
       </div>
       <div class="panel">
         <div class="panel-head">
@@ -234,6 +258,16 @@
         <div id="firms" class="small"></div>
       </div>
     </div>
+  </section>
+
+  <!-- ============ SOURCES ============ -->
+  <section class="section">
+    <div class="eyebrow-row">
+      <span class="eyebrow">Pipeline</span>
+      <span class="quiet-link">sources → stitched 5-min series → feature frame → predictions</span>
+    </div>
+    <h2 class="section-title">Data sources</h2>
+    <div id="health" class="health-grid"></div>
   </section>
 
   <!-- ============ EPISODES ============ -->

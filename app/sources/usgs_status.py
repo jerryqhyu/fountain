@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import time
 
 from .. import db
 from ..config import VNUM
@@ -20,13 +19,6 @@ def fetch() -> str:
     if not k:
         raise ValueError("Kīlauea not present in vhpstatus response")
     db.cache_put("usgs_status", json.dumps(k))
-    with db.tx() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO status_history(fetched_at,alert_level,color_code,alert_date,notice_id,synopsis) "
-            "VALUES(?,?,?,?,?,?)",
-            (int(time.time()), k.get("alertLevel"), k.get("colorCode"), k.get("alertDate"),
-             k.get("noticeId"), k.get("noticeSynopsis")),
-        )
     return f"{k.get('alertLevel')}/{k.get('colorCode')}"
 
 

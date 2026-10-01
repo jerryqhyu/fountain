@@ -24,7 +24,7 @@ import pandas as pd
 
 from .. import db
 from ..config import HST
-from ..fetchers.base import get, tracked
+from ..sources.base import get, tracked
 
 log = logging.getLogger("episodes")
 
@@ -171,8 +171,6 @@ def fetch() -> str:
         upsert(m, "manual")
     # keep the shipped snapshot fresh so a later outage still has recent rows
     df.to_csv(SEED, index=False, quoting=csv.QUOTE_MINIMAL)
-    from ..analytics import tilt as tilt_an  # late import: avoids a cycle
-    tilt_an.annotate_episodes()
     return f"{n} rows"
 
 
