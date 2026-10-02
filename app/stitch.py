@@ -40,10 +40,10 @@ def grid(t1: int | None = None) -> np.ndarray:
 
 
 def on_grid(g: np.ndarray, t: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Place values with slot-aligned timestamps onto the grid (NaN elsewhere)."""
+    """Place values with slot-aligned timestamps onto the slot array g (NaN elsewhere)."""
     out = np.full(len(g), np.nan)
-    if len(t):
-        idx = (np.asarray(t, np.int64) - GRID_START) // GRID_S
+    if len(t) and len(g):
+        idx = (np.asarray(t, np.int64) - int(g[0])) // GRID_S
         ok = (idx >= 0) & (idx < len(g))
         out[idx[ok]] = np.asarray(v, float)[ok]
     return out
@@ -75,7 +75,7 @@ def write_series(table: str, g: np.ndarray, v: np.ndarray, src: np.ndarray) -> i
     old_v = on_grid(g, old["t"].to_numpy(), old["v"].to_numpy()) if len(old) else np.full(len(g), np.nan)
     old_s = np.full(len(g), None, dtype=object)
     if len(old):
-        idx = (old["t"].to_numpy(np.int64) - GRID_START) // GRID_S
+        idx = (old["t"].to_numpy(np.int64) - int(g[0])) // GRID_S
         ok = (idx >= 0) & (idx < len(g))
         old_s[idx[ok]] = old["src"].to_numpy()[ok]
     have, had = ~np.isnan(v), ~np.isnan(old_v)

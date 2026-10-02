@@ -4,8 +4,11 @@ USGS publishes live tilt only as plot images (the CSV release lags ~60 days; UWD
 on EarthScope FDSN). Two plots are used: the 2-day plot (live, fine) and the 3-month plot
 (bridges the release lag on a fresh install).
 
-Each digitization is interpolated onto the 5-minute grid and stored in the plot's own
-offset (values are aligned to the authoritative series at stitch time). A slot keeps its
+Each digitization is interpolated onto the 5-minute grid. HVO's "raw data" plots are not on a
+fixed baseline (the offset shifts between images, e.g. when the axis rescales), so every new
+digitization is first aligned to the values this table already holds (median difference over the
+frozen part of the overlap). The table therefore stays on one consistent baseline, which is in
+turn aligned to the authoritative series at stitch time. A slot keeps its
 first recorded value; only the last TAIL_REFRESH_S of the table may be revised, so the
 hourly re-digitizing of a coarse plot cannot make history wobble.
 """
@@ -39,6 +42,20 @@ def to_grid(d: digitize.Digitized) -> tuple[np.ndarray, np.ndarray]:
     return g[ok], v[ok]
 
 
+def align(table: str, slots: np.ndarray, vals: np.ndarray) -> tuple[np.ndarray, float | None]:
+    """Shift a digitization onto the table's baseline using the frozen overlap."""
+    last = db.query_one(f"SELECT MAX(t) AS t FROM {table}")["t"]
+    if not last:
+        return vals, None
+    old = {r["t"]: r["v"] for r in db.query(f"SELECT t, v FROM {table} WHERE t>=? AND t<=?",
+                                            (int(slots[0]), int(last) - TAIL_REFRESH_S))}
+    idx = [i for i, t in enumerate(slots) if int(t) in old]
+    if len(idx) < 12:
+        return vals, None
+    off = float(np.median([old[int(slots[i])] - vals[i] for i in idx]))
+    return vals + off, off
+
+
 def store(table: str, slots: np.ndarray, vals: np.ndarray) -> int:
     last = db.query_one(f"SELECT MAX(t) AS t FROM {table}")["t"] or 0
     have = {r["t"] for r in db.query(f"SELECT t FROM {table} WHERE t >= ?", (int(slots[0]),))}
@@ -62,10 +79,13 @@ def _fetch(key: str) -> str:
     if d.y_fit_resid > 0.6:
         raise ValueError(f"y-axis labels mostly unreadable ({d.y_fit_resid:.0%} disagree)")
     slots, vals = to_grid(d)
+    vals, off = align(table, slots, vals)
     n = store(table, slots, vals)
     db.kv_set(f"plot_meta:{key}", {"start": d.start, "end": d.end, "urad_per_px": d.urad_per_px,
-                                   "label_disagreement": d.y_fit_resid, "fetched_at": int(time.time())})
-    return f"{len(slots)} slots digitized, {n} written; plot ends {d.end}"
+                                   "label_disagreement": d.y_fit_resid, "ingest_offset": off,
+                                   "fetched_at": int(time.time())})
+    return (f"{len(slots)} slots digitized, {n} written"
+            f"{'' if off is None else f', shifted {off:+.2f} µrad onto table baseline'}; plot ends {d.end}")
 
 
 @tracked("uwd_plot2d")

@@ -130,7 +130,9 @@ def build(t0: int | None = None, t1: int | None = None) -> pd.DataFrame:
     df["last_end"] = np.where(has, ends[li], np.nan).astype(float)
     df["next_onset"] = np.where(nxt < len(starts), starts[np.minimum(nxt, len(starts) - 1)], np.nan).astype(float)
 
-    v = tilt.rolling(SLOTS_PER_H, min_periods=SLOTS_PER_H // 2).median().to_numpy()
+    # current level = median of whatever arrived in the last hour: live inputs lag 10–40 min
+    # (HVO's 2-day plot), so only a full hour without data counts as a genuine gap
+    v = tilt.rolling(SLOTS_PER_H, min_periods=1).median().to_numpy()
     trough = eps["trough_v"].to_numpy(float)[li]
     onset = eps["onset_v"].to_numpy(float)[li]
     defl = eps["defl"].to_numpy(float)[li]
@@ -144,7 +146,7 @@ def build(t0: int | None = None, t1: int | None = None) -> pd.DataFrame:
     df["tilt_rate_24h"] = rate(tilt, 24).to_numpy()
     df["tilt_value"] = v
 
-    r1 = rsam.rolling(SLOTS_PER_H, min_periods=SLOTS_PER_H // 2).median()
+    r1 = rsam.rolling(SLOTS_PER_H, min_periods=1).median()
     r6 = rsam.rolling(6 * SLOTS_PER_H, min_periods=3 * SLOTS_PER_H).median()
     r24 = rsam.rolling(24 * SLOTS_PER_H, min_periods=12 * SLOTS_PER_H).median()
     with np.errstate(invalid="ignore", divide="ignore"):

@@ -65,3 +65,10 @@ def test_parse_event_time():
     assert parse_event_time("Episode 54 began at 10:30 HST on August 25, 2026.", sent) == ("onset", hst(2026, 8, 25, 10, 30))
     assert parse_event_time("Episode 54 began at 10:30 a.m. HST on Tuesday, August 25", sent) == ("onset", hst(2026, 8, 25, 10, 30))
     assert parse_event_time("began at 10:30 a.m. HST on August 1", sent) is None  # too old for this notice
+
+
+def test_on_grid_uses_array_start():
+    from app.stitch import on_grid
+    g = np.arange(1790000000, 1790000000 + 3000, 300)
+    out = on_grid(g, np.array([1790000600, 1790001500]), np.array([1.0, 2.0]))
+    assert out[2] == 1.0 and out[5] == 2.0 and np.isnan(out[0])
