@@ -3,7 +3,8 @@
 h(x_t) = P(onset in (t, t+1h] | no onset yet, x_t), fitted by penalized logistic regression
 on every pause-hour since episode 4. Nonlinear effects of repose time and tilt recovery
 enter through natural-ish cubic splines with *constant extrapolation*, so states outside
-the training range (e.g. a record-long pause) saturate instead of blowing up.
+the training range (e.g. a record-long pause) saturate instead of blowing up. Tilt recovery is
+capped at the highest value seen at an onset, so the effect saturates there instead of turning down.
 
 P(onset within H) = 1 - prod_{k<H} (1 - h(x_{t+k})), where the future path holds the
 current state fixed except that repose time advances and tilt keeps inflating at the
@@ -24,7 +25,7 @@ GROUPS = {  # design-matrix blocks -> source feature
     "tilt_rate_24h": "tilt_rate_24h",
     "rsam_ratio_log": "rsam_ratio_log",
     "precursor": "precursor",
-    "eq_summit_24h": "eq_summit_24h",
+    "eq_summit_ew": "eq_summit_ew",
 }
 CLIP = {
     "recovery_ratio": (-0.5, 2.0),
@@ -45,9 +46,11 @@ class HazardModel:
         x["hours_since_end"] = np.log(np.clip(df["hours_since_end"].to_numpy(float), 1.0, None))
         for k in ("recovery_ratio", "tilt_rate_24h", "rsam_ratio_log"):
             lo, hi = CLIP[k]
+            if k == "recovery_ratio":
+                hi = min(hi, self.rr_cap_)
             x[k] = np.clip(df[k].to_numpy(float), lo, hi)
         x["precursor"] = df["precursor"].to_numpy(float)
-        x["eq_summit_24h"] = np.log1p(df["eq_summit_24h"].to_numpy(float))
+        x["eq_summit_ew"] = np.log1p(df["eq_summit_ew"].to_numpy(float))
         return x
 
     def _design(self, x: pd.DataFrame, fit: bool = False) -> tuple[np.ndarray, list[str]]:
@@ -64,7 +67,7 @@ class HazardModel:
             b = getattr(self, f"spline_{col}_").transform(x[[col]])
             blocks.append(b)
             names += [col] * b.shape[1]
-        for col in ("tilt_rate_24h", "rsam_ratio_log", "precursor", "eq_summit_24h"):
+        for col in ("tilt_rate_24h", "rsam_ratio_log", "precursor", "eq_summit_ew"):
             blocks.append(x[[col]].to_numpy(float))
             names.append(col)
         X = np.hstack(blocks)
@@ -74,6 +77,11 @@ class HazardModel:
 
     # --- fit / predict ---------------------------------------------------------
     def fit(self, df: pd.DataFrame, y1: np.ndarray) -> "HazardModel":
+        # Cap recovery at the highest level seen at an actual onset. Beyond it the only training
+        # hours come from pauses that hadn't ended yet (e.g. the current record pause), which would
+        # teach the spline that *more* inflation means a *lower* hazard; capped, it saturates.
+        pos = df["recovery_ratio"].to_numpy(float)[y1.astype(bool)]
+        self.rr_cap_ = float(np.nanmax(pos)) if np.isfinite(pos).any() else CLIP["recovery_ratio"][1]
         x = self._prep(df)
         X, self.names_ = self._design(x, fit=True)
         self.clf_ = LogisticRegression(C=self.C, max_iter=5000)

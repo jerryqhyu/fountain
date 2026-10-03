@@ -89,12 +89,16 @@ That stops the hourly re-digitizing of a coarse plot from making history wobble.
 
 Both models are trained on the frame's on-the-hour rows during pauses since episode 4, using
 rows where every feature is present. Features use only data at or before the slot: repose time, tilt recovery relative to the last deflation, tilt
-relative to the last onset level, tilt rates, RSAM level/trend, quake counts, and whether HVO's
-latest update reports precursory activity.
+relative to the last onset level, tilt rates (6 h least-squares; 24 h as the median of hourly
+changes, so a few-hour step such as a dike intrusion doesn't inflate it for a day), RSAM level/trend, quake counts (exponentially weighted, 6 h e-folding,
+so a swarm fades instead of dropping off after 24 h), and whether HVO's latest update reports
+precursory activity (a flag that fades with the notice's age, 24 h e-folding).
 
 * **hazard-1.0 (primary, left card)**. A discrete-time survival model: a logistic hourly hazard with splines on
   repose time and tilt recovery. Splines extrapolate as constants, so out-of-range states
-  saturate. It's projected forward 12/24/72 h with repose advancing and tilt inflating at the
+  saturate. Tilt recovery is capped at the highest value seen at an actual onset (≈1.65×): above
+  that, the only training hours come from pauses that hadn't ended, which taught the spline that
+  more inflation means a lower hazard. It's projected forward 12/24/72 h with repose advancing and tilt inflating at the
   current rate. "Top factors" are per-feature log-odds contributions.
 * **ml-1.0 (comparison, right card)**. Gradient-boosted trees, one per horizon, isotonic-calibrated on grouped
   out-of-fold predictions. Factors are ablations (the prediction change when a feature is set to

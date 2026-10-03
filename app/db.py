@@ -33,7 +33,7 @@ FRAME_COLUMNS = [
     "hours_since_end", "recovery_ratio", "inflation_urad", "gap_to_onset_urad", "last_deflation_urad",
     "tilt_rate_6h", "tilt_rate_24h", "tilt_value",
     "rsam_log", "rsam_ratio_log", "rsam_trend_log", "rsam_1h_ums",
-    "eq_summit_24h", "eq_all_24h", "precursor",
+    "eq_summit_ew", "eq_all_ew", "precursor",
 ]
 
 SCHEMA = """
@@ -101,6 +101,9 @@ def connect() -> sqlite3.Connection:
 
 def init() -> None:
     with connect() as c:
+        have = [r[1] for r in c.execute("PRAGMA table_info(frame)")]
+        if have and have != ["t"] + FRAME_COLUMNS:  # derived table: rebuilt by pipeline.rebuild()
+            c.execute("DROP TABLE frame")
         c.executescript(SCHEMA)
 
 

@@ -164,7 +164,8 @@ function fmtFeature(f, v) {
     case "tilt_rate_6h": case "tilt_rate_24h": return `${v >= 0 ? "+" : ""}${v.toFixed(3)} µrad/h`;
     case "rsam_log": return `${Math.pow(10, v).toFixed(3)} µm/s`;
     case "rsam_ratio_log": case "rsam_trend_log": return `${Math.pow(10, v).toFixed(2)}×`;
-    case "precursor": return v ? "yes" : "no";
+    case "precursor": return v > 0 ? `yes · weight ${v.toFixed(2)}` : "no";
+    case "eq_summit_ew": case "eq_all_ew": return v.toFixed(1);
     default: return String(Math.round(v * 100) / 100);
   }
 }
@@ -222,7 +223,7 @@ const BUILT_FROM = {
   hours_since_end: "episode catalog", recovery_ratio: "stitched tilt + catalog", inflation_urad: "stitched tilt + catalog",
   gap_to_onset_urad: "stitched tilt + catalog", last_deflation_urad: "stitched tilt + catalog",
   tilt_rate_6h: "stitched tilt", tilt_rate_24h: "stitched tilt", rsam_log: "stitched tremor", rsam_ratio_log: "stitched tremor",
-  rsam_trend_log: "stitched tremor", eq_summit_24h: "ComCat", eq_all_24h: "ComCat", precursor: "HVO notices (keywords)",
+  rsam_trend_log: "stitched tremor", eq_summit_ew: "ComCat", eq_all_ew: "ComCat", precursor: "HVO notices (keywords)",
 };
 function renderInputs(fr) {
   if (!fr?.t?.length) return;

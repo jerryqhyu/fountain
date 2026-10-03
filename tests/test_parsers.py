@@ -72,3 +72,16 @@ def test_on_grid_uses_array_start():
     g = np.arange(1790000000, 1790000000 + 3000, 300)
     out = on_grid(g, np.array([1790000600, 1790001500]), np.array([1.0, 2.0]))
     assert out[2] == 1.0 and out[5] == 2.0 and np.isnan(out[0])
+
+
+def test_robust_rate_ignores_short_step():
+    import numpy as np
+    import pandas as pd
+
+    from app.frame import SLOTS_PER_H, robust_rate
+
+    n = 48 * SLOTS_PER_H
+    v = 0.1 * np.arange(n) / SLOTS_PER_H  # steady 0.1 µrad/h
+    v[-12 * SLOTS_PER_H:] += 40.0  # 40 µrad step 12 h ago (e.g. a dike intrusion)
+    r = robust_rate(pd.Series(v), 24).to_numpy()
+    assert abs(r[-1] - 0.1) < 1e-9
