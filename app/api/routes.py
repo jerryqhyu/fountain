@@ -151,6 +151,9 @@ def tilt(hours: float = HOURS, start: int | None = START, end: int | None = END)
                 d = d.iloc[0:0]
             else:
                 d = d.assign(v=d["v"] + off)
+            if s.key == "uwd_release":  # shown on the baseline it was stitched on
+                mapping["relevels"] = info.get("relevels", [])
+                d = d.assign(v=d["v"] + stitch.relevel_shift(d["t"], mapping["relevels"]))
         sources.append({"key": s.key, "label": s.label, "note": s.note, "mapping": mapping,
                         **series_json(d), "health": health_row(s.key)})
     full = frame.series("series_tilt", np.arange(t0 - 2 * 86400 - t0 % GRID_S, t1 + 1, GRID_S))

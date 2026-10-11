@@ -306,6 +306,7 @@ function sourcesTable(d, colors, kind) {
     let map = "";
     if (s.mapping?.offset != null && s.key !== "uwd_release") map = `offset ${s.mapping.offset >= 0 ? "+" : ""}${num(s.mapping.offset, 3)} µrad`;
     else if (s.mapping && "offset" in s.mapping && s.mapping.offset == null) map = "not aligned (no overlap)";
+    if (s.mapping?.relevels?.length) map = "authoritative; re-levelling removed: " + s.mapping.relevels.map((r) => (r.offset == null ? "unresolved" : `${r.offset >= 0 ? "+" : ""}${num(r.offset, 2)} µrad`)).join(", ");
     if (s.mapping?.fits?.length) map = s.mapping.fits.map((f) => `${f.used ? "used" : "rejected"} R²=${f.r2}`).join(", ");
     if (s.mapping?.ratios?.length) map = s.mapping.ratios.map((r) => (r.used === false ? `rejected ×${Number(r.ratio).toPrecision(2)}` : `×${num(r.ratio, 3)}`)).join(", ");
     const h = s.health || {};

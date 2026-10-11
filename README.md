@@ -61,14 +61,14 @@ sources (one table each, native resolution)
 
 | Type | Source (priority order) | Table | Mapping onto the grid | Poll |
 |---|---|---|---|---|
-| tilt | UWD USGS 1-min release (az 300°) | `src_tilt_uwd_release` | stored as 5-min means; authoritative | daily (≈60-day lag) |
+| tilt | UWD USGS 1-min release (az 300°) | `src_tilt_uwd_release` | stored as 5-min means exactly as published; authoritative. Where USGS restarts a file after re-levelling the tiltmeter, the baseline step is removed when stitching | daily (≈60-day lag) |
 | tilt | UWD HVO 2-day plot, digitized | `src_tilt_uwd_plot2d` | stored as 5-min samples; median offset to the series built so far | 10 min |
 | tilt | UWD HVO 3-month plot, digitized | `src_tilt_uwd_plot3m` | same (aligned before the 2-day plot so that one can chain through it) | hourly |
 | tilt | SDH USGS release | `src_tilt_sdh_release` | per-gap fit UWD ≈ a·E + b·N + c on ±5 days of pause data; used if R² ≥ 0.9 | daily |
 | tremor | UWE HHZ (EarthScope FDSN) | `src_rsam_uwe` | 10-min RSAM, 1–5 Hz, µm/s; a slot is the median of its hour's windows | 10 min |
 | tremor | UWE.QC HHZ | `src_rsam_uwe_qc` | as-is (agrees with UWE to ~1%) | 10 min |
 | tremor | OBL, UWB, RIMD HHZ | `src_rsam_obl` … | fetched only around UWE gaps; scaled by the median UWE/substitute ratio within 24 h, rejected if that ratio is outside 0.1–10 (dead sensor) | on gaps |
-| events | USGS ComCat | `earthquakes` | exponentially weighted summit count (6 h e-folding) | 5 min |
+| events | USGS ComCat | `earthquakes` | exponentially weighted summit count (6 h e-folding); the last 30 days are re-pulled each time so reviews and deletions carry over | 5 min |
 | events | HVO notices (HANS) | `notices` | precursory-activity keyword flag, valid 36 h | 12 min |
 | events | HVO observatory messages ("Kilauea Message") | `messages` | display only (posts between Daily Updates) | 10 min |
 | catalog | USGS episode table | `episodes` | episode start/end → repose, onset/trough tilt | 6 h |

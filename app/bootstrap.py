@@ -23,6 +23,7 @@ log = logging.getLogger("bootstrap")
 LEGACY_DB = DATA_DIR / "volcano.db"
 # In the legacy DB, UWE.QC windows were merged into UWE during this primary-sensor outage.
 LEGACY_QC_WINDOW = (1786833000, 1786833000 + 745 * 3600)
+REPAIRS = 1  # bump when repair() gains a step
 
 
 def _legacy() -> sqlite3.Connection | None:
@@ -82,6 +83,21 @@ def step(name, fn, *a):
         log.warning("bootstrap step %s failed: %s", name, e)
 
 
+def repair() -> None:
+    """One-off corrections to rows stored by earlier versions; idempotent, rerun on start until finished."""
+    now = int(time.time())
+    step("ComCat revisions", comcat.backfill)
+    step("UWD release breaks", tilt_release.fetch_uwd)
+    step("SDH release, headerless file", tilt_release.fetch_sdh)
+    for key in rsam.TABLE:
+        step(f"{key} chunk-edge windows", rsam.repair_edges, key)
+    live_since = (db.kv_get("bootstrap_done") or now) - 6 * 3600  # live windows were dimmed by the same taper
+    for key in ("uwe", "uwe_qc"):
+        step(f"{key} live windows", rsam.compute_range, key, live_since, now, 0.3, True)
+    step("stitch, frame, train", pipeline.rebuild, True)
+    db.kv_set("repairs", REPAIRS)
+
+
 def run() -> None:
     db.init()
     catalog.seed()
@@ -103,6 +119,7 @@ def run() -> None:
          LEGACY_QC_WINDOW[0] - 86400, LEGACY_QC_WINDOW[1] + 86400)
     step("substitute stations for UWE gaps", rsam.fill_substitutes, GRID_START, now)
     step("stitch, frame, train", pipeline.rebuild, True)
+    db.kv_set("repairs", REPAIRS)  # everything above was stored by this version
     db.kv_set("bootstrap_done", int(time.time()))
 
 

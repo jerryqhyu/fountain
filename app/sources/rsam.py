@@ -72,7 +72,7 @@ def compute(key: str, t0: int, t1: int) -> list[tuple[int, float]]:
     tr2 = tr.copy()
     tr2.data = np.where(np.isnan(x), fill, x)
     tr2.detrend("demean")
-    tr2.taper(0.01)
+    tr2.taper(0.01, max_length=pad)  # inside the padding only: a longer taper dims the first and last window
     tr2.filter("bandpass", freqmin=RSAM_BAND[0], freqmax=RSAM_BAND[1], corners=4, zerophase=True)
     y = np.abs(tr2.data)
     y[mask | np.isnan(x)] = np.nan
@@ -92,15 +92,15 @@ def compute(key: str, t0: int, t1: int) -> list[tuple[int, float]]:
     return out
 
 
-def compute_range(key: str, t0: int, t1: int, sleep_s: float = 0.3) -> int:
-    """Chunked compute + store; skips chunks that are already ≥90% present."""
+def compute_range(key: str, t0: int, t1: int, sleep_s: float = 0.3, force: bool = False) -> int:
+    """Chunked compute + store; skips chunks that are already ≥90% present unless forced."""
     table = TABLE[key]
     n = 0
     t = (t0 // CHUNK_S) * CHUNK_S
     while t < t1:
         te = min(t + CHUNK_S, t1)
         have = db.query_one(f"SELECT COUNT(*) AS n FROM {table} WHERE t>=? AND t<?", (t, te))["n"]
-        if have < 0.9 * (te - t) / RSAM_WINDOW_S:
+        if force or have < 0.9 * (te - t) / RSAM_WINDOW_S:
             for attempt in range(3):
                 try:
                     n += db.upsert(table, ["t", "v"], compute(key, t, te))
@@ -110,6 +110,34 @@ def compute_range(key: str, t0: int, t1: int, sleep_s: float = 0.3) -> int:
                     time.sleep(5 * (attempt + 1))
             time.sleep(sleep_s)
         t = te
+    return n
+
+
+def repair_edges(key: str) -> int:
+    """Recompute the window either side of every 6 h chunk boundary.
+
+    Windows stored before the taper was confined to the padding read ~9 % low there.
+    Resumable: progress is kept in kv.
+    """
+    table = TABLE[key]
+    span = db.query_one(f"SELECT MIN(t) AS a, MAX(t) AS b FROM {table}")
+    if span["a"] is None:
+        return 0
+    n = 0
+    first = max(-(-span["a"] // CHUNK_S) * CHUNK_S, db.kv_get(f"rsam_edges:{key}", 0))
+    for i, b in enumerate(range(first, span["b"] + 1, CHUNK_S)):
+        if db.query_one(f"SELECT COUNT(*) AS n FROM {table} WHERE t IN (?, ?)", (b - RSAM_WINDOW_S, b))["n"]:
+            for attempt in range(3):
+                try:
+                    n += db.upsert(table, ["t", "v"], compute(key, b - RSAM_WINDOW_S, b + RSAM_WINDOW_S))
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.warning("rsam %s edge %s failed (%s)", key, UTCDateTime(b), e)
+                    time.sleep(5 * (attempt + 1))
+            time.sleep(0.1)
+        if i % 50 == 49:
+            db.kv_set(f"rsam_edges:{key}", b)
+    db.kv_set(f"rsam_edges:{key}", span["b"])
     return n
 
 
