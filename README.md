@@ -92,7 +92,7 @@ That stops the hourly re-digitizing of a coarse plot from making history wobble.
 
 ## Model (`app/model/`)
 
-One model, **hazard-1.0**, gives the probability that a fountaining episode starts within the
+One model, **hazard-1.1**, gives the probability that a fountaining episode starts within the
 next 12 hours. It is trained on the frame's hourly rows during pauses since episode 4 (episodes
 1–3 were near-continuous), using rows where every input is present. Inputs use only data at or
 before the slot: repose time, tilt recovery relative to the last deflation, the 24 h tilt rate
@@ -101,6 +101,12 @@ for a day), tremor in the last hour relative to the last 24 h, the summit quake 
 (exponentially weighted, 6 h e-folding, so a swarm fades instead of dropping off after 24 h), and
 whether HVO's latest update reports precursory activity (a flag that fades with the notice's
 age, 24 h e-folding).
+
+The fit is an L2-penalized logistic regression. The penalty weight (`L2` in `app/model/hazard.py`,
+currently 10) comes from a walk-forward grid search, `uv run python -m scripts.l2_grid`: between
+the weight with the best log loss on completed cycles (about 2) and the strongest one within one
+standard error of it (20), where monthly fits are steadier at little cost in accuracy.
+Changing it, or the model version, makes the next pipeline run refit every month.
 
 It is a discrete-time survival model: a logistic hourly hazard with splines on repose time and
 tilt recovery. Splines extrapolate as constants, so out-of-range states saturate. Tilt recovery

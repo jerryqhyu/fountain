@@ -168,10 +168,11 @@ def models() -> dict | None:
 
 
 def stale(now: int | None = None) -> bool:
-    """True when there is no model yet, or a new month has begun since the last fit."""
+    """True when there is no model yet, it is another version's, or a new month has begun since the last fit."""
     m = models()
     months = month_starts(int(now or time.time()))
-    return m is None or (bool(months) and months[-1] > m["meta"]["fit_through"])
+    return (m is None or m["meta"].get("version") != HazardModel.version
+            or (bool(months) and months[-1] > m["meta"]["fit_through"]))
 
 
 # ------------------------------------------------------------------ inference
