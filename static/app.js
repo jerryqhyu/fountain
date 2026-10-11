@@ -180,7 +180,8 @@ function renderModelCard(m) {
     // the model gave no number for the current hour: say why, shaded, instead of showing an older value
     const why = m?.reason === "feature_missing" ? `Feature missing: ${m.missing.map((f) => f.label).join(", ")}`
       : m?.reason === "episode" ? "Episode under way" : "No valid prediction yet";
-    tiles.innerHTML = `<div class="tile none"><div class="h">next 12 h</div><div class="v">—</div><div class="why">${esc(why)}</div></div>`;
+    const kind = m?.reason === "feature_missing" ? " missing" : m?.reason === "episode" ? " episode" : "";
+    tiles.innerHTML = `<div class="tile none${kind}"><div class="h">next 12 h</div><div class="v">—</div><div class="why">${esc(why)}</div></div>`;
     card.querySelector("[data-trend]").textContent = "";
     card.querySelector("[data-lag]").textContent = (m?.t ? `No prediction for ${fmtHST(m.t)}` : "")
       + (m?.last_valid ? ` · last value ${pct(m.last_valid.p12)}, ${fmtHST(m.last_valid.t)}` : "");
@@ -271,9 +272,9 @@ function renderProbChart(p) {
   for (const m of p.missing || []) {
     const a = Math.max(m.from - 1800, t0), b = Math.min(m.to + 1800, t1);
     if (b <= a) continue;
-    shapes.push({ type: "rect", xref: "x", yref: "paper", x0: hst(a), x1: hst(b), y0: 0, y1: 1, line: { width: 0 }, fillcolor: css("--muted"), opacity: 0.16, layer: "below" });
+    shapes.push({ type: "rect", xref: "x", yref: "paper", x0: hst(a), x1: hst(b), y0: 0, y1: 1, line: { width: 0 }, fillcolor: css("--missing"), layer: "below" });
     if ((b - a) / (t1 - t0) > 0.07) ann.push({ x: hst((a + b) / 2), xref: "x", yref: "paper", y: 1, yanchor: "top", yshift: -6, showarrow: false, text: "feature missing",
-      hovertext: m.labels.join(", "), font: { size: 11.5, color: css("--ink-2") } });
+      hovertext: m.labels.join(", "), font: { size: 11.5, color: css("--critical") } });
   }
   for (const c of p.refits || []) shapes.push({ type: "line", xref: "x", yref: "paper", x0: hst(c), x1: hst(c), y0: 0, y1: 1, line: { color: css("--muted"), width: 1, dash: "dot" }, opacity: 0.45, layer: "below" });
   Plotly.react("chart-prob", traces, baseLayout({ margin: { l: 44, r: 44, t: 14, b: 34 }, shapes, annotations: ann, yaxis: { ticksuffix: "%", rangemode: "tozero" } }), config);
@@ -493,7 +494,7 @@ function applyCustom() {
 function initControls() {
   const savedDays = store.get("days");
   if (savedDays === "all") state.days = "all";
-  else if ([1, 7, 30, 90].includes(Number(savedDays))) state.days = Number(savedDays);
+  else if ([1, 7, 30, 90, 180].includes(Number(savedDays))) state.days = Number(savedDays);
   markOn("range", "d", state.days);
   const [a, b] = (store.get("custom") || "").split("/");
   if (a && b) { $("range-start").value = a; $("range-end").value = b; applyCustom(); }
