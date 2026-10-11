@@ -1,7 +1,7 @@
 """hazard-v1: discrete-time survival model (hourly logistic hazard).
 
 h(x_t) = P(onset in (t, t+1h] | no onset yet, x_t), fitted by penalized logistic regression
-on every pause-hour since episode 4. Nonlinear effects of repose time and tilt recovery
+on the hourly frame rows of every pause since episode 4. Nonlinear effects of repose time and tilt recovery
 enter through natural-ish cubic splines with *constant extrapolation*, so states outside
 the training range (e.g. a record-long pause) saturate instead of blowing up. Tilt recovery is
 capped at the highest value seen at an onset, so the effect saturates there instead of turning down.
@@ -94,7 +94,7 @@ class HazardModel:
         X, _ = self._design(self._prep(df))
         return self.clf_.predict_proba(X)[:, 1]
 
-    def predict(self, df: pd.DataFrame, horizons=(12, 24, 72)) -> dict[int, np.ndarray]:
+    def predict(self, df: pd.DataFrame, horizons=(12,)) -> dict[int, np.ndarray]:
         Hmax = max(horizons)
         n = len(df)
         base = df[list(GROUPS) + ["last_deflation_urad"]].reset_index(drop=True)

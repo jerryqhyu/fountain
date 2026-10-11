@@ -1,6 +1,7 @@
-"""Stitch each data type's sources onto the 5-minute grid.
+"""Stitch each data type's sources onto the hourly grid.
 
-For every slot the first source in priority order that has a value wins (see
+Every source is first reduced to one value per slot: the median of its samples from the hour
+that ends at the slot. For every slot the first source in priority order that has a value wins (see
 sources/__init__.py). Sources that are not directly comparable are mapped first:
 
 tilt   - HVO plot digitizations carry an arbitrary per-plot offset: aligned by the median
@@ -8,7 +9,7 @@ tilt   - HVO plot digitizations carry an arbitrary per-plot offset: aligned by t
          (release → 3-month plot → 2-day plot, so the 2-day plot can align via the 3-month).
        - SDH fills remaining UWD gaps through UWD ≈ a·east + b·north + c fitted on the
          pause-time slots within 5 days of the gap; used only if R² ≥ 0.9.
-tremor - 10-minute RSAM windows cover two slots each. UWE.QC is used as-is (~1% from UWE);
+tremor - a slot is the median of the 10-minute RSAM windows in its hour. UWE.QC is used as-is (~1% from UWE);
          OBL/UWB/RIMD are scaled by the median UWE/substitute ratio within 24 h of the gap.
 
 The stitched series and the per-source mappings (offsets, fits, ratios) are stored so the
@@ -29,8 +30,11 @@ from .sources.base import tracked
 
 log = logging.getLogger("stitch")
 
-TILT_TABLE = {s.key: s.table for s in TILT_SOURCES}
-TREMOR_TABLE = {s.key: s.table for s in TREMOR_SOURCES}
+SOURCE_TABLE = {s.key: s.table for s in TILT_SOURCES + TREMOR_SOURCES}
+# seconds each stored sample covers after its timestamp: release tilt is 5-minute means keyed by
+# bin start, plot digitizations are point samples, RSAM windows are keyed by window start
+SAMPLE_S = {"uwd_release": 300, "sdh_release": 300, "uwd_plot2d": 0, "uwd_plot3m": 0,
+            **{s.key: RSAM_WINDOW_S for s in TREMOR_SOURCES}}
 
 
 # ------------------------------------------------------------------ grid helpers
@@ -52,6 +56,23 @@ def on_grid(g: np.ndarray, t: np.ndarray, v: np.ndarray) -> np.ndarray:
 def load(table: str, cols: str = "t, v") -> pd.DataFrame:
     rows = db.query(f"SELECT {cols} FROM {table} ORDER BY t")
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[c.strip() for c in cols.split(",")])
+
+
+def hourly(d: pd.DataFrame, sample_s: int) -> pd.DataFrame:
+    """Median of a source's samples per grid slot.
+
+    A sample stamped t covers [t, t + sample_s) and goes to the first slot at or after its end,
+    so a slot only ever holds data from the hour before its own timestamp.
+    """
+    if d.empty:
+        return d
+    slot = -(-(d["t"].to_numpy(np.int64) + sample_s) // GRID_S) * GRID_S
+    return d.drop(columns="t").groupby(slot).median().rename_axis("t").reset_index()
+
+
+def source(key: str, cols: str = "t, v") -> pd.DataFrame:
+    """A source table reduced to the hourly grid."""
+    return hourly(load(SOURCE_TABLE[key], cols), SAMPLE_S[key])
 
 
 def runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -105,14 +126,14 @@ def build_tilt(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
     src = np.full(len(g), None, dtype=object)
     info: dict = {"offsets": {}, "sdh_fits": []}
 
-    rel = load(TILT_TABLE["uwd_release"])
+    rel = source("uwd_release")
     r = on_grid(g, rel["t"].to_numpy(), rel["v"].to_numpy())
     take = ~np.isnan(r)
     v[take], src[take] = r[take], "uwd_release"
 
     plots = {}
     for key in ("uwd_plot3m", "uwd_plot2d"):
-        d = load(TILT_TABLE[key])
+        d = source(key)
         plots[key] = on_grid(g, d["t"].to_numpy(), d["v"].to_numpy())
     # offsets: chain coarse → fine so the 2-day plot can align through the 3-month plot
     comp = v.copy()
@@ -131,7 +152,7 @@ def build_tilt(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
         v[take], src[take] = plots[key][take] + off, key
 
     # SDH: local linear fit per remaining gap
-    sdh = load(TILT_TABLE["sdh_release"], "t, east, north")
+    sdh = source("sdh_release", "t, east, north")
     if len(sdh):
         e = on_grid(g, sdh["t"].to_numpy(), sdh["east"].to_numpy())
         n = on_grid(g, sdh["t"].to_numpy(), sdh["north"].to_numpy())
@@ -148,7 +169,7 @@ def build_tilt(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
             win[i0:i1 + 1] = False
             fitm = win & pause & ~np.isnan(v) & ~np.isnan(e) & ~np.isnan(n)
             gap = slice(i0, i1 + 1)
-            if fitm.sum() < 200 or np.isnan(e[gap]).all():
+            if fitm.sum() < 48 or np.isnan(e[gap]).all():
                 continue
             X = np.column_stack([e[fitm], n[fitm], np.ones(fitm.sum())])
             coef, *_ = np.linalg.lstsq(X, v[fitm], rcond=None)
@@ -165,26 +186,19 @@ def build_tilt(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
 
 
 # ------------------------------------------------------------------ tremor
-def windows_on_grid(g: np.ndarray, d: pd.DataFrame) -> np.ndarray:
-    """Each 10-minute window value covers the slots it spans."""
-    out = np.full(len(g), np.nan)
-    if not len(d):
-        return out
-    t, val = d["t"].to_numpy(np.int64), d["v"].to_numpy(float)
-    for k in range(RSAM_WINDOW_S // GRID_S):
-        out = np.where(np.isnan(out), on_grid(g, t + k * GRID_S, val), out)
-    return out
-
-
 def build_tremor(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
     v = np.full(len(g), np.nan)
     src = np.full(len(g), None, dtype=object)
     info: dict = {"ratios": []}
     for key in ("uwe", "uwe_qc"):
-        s = windows_on_grid(g, load(TREMOR_TABLE[key]))
+        d = source(key)
+        s = on_grid(g, d["t"].to_numpy(), d["v"].to_numpy())
         take = np.isnan(v) & ~np.isnan(s)
         v[take], src[take] = s[take], key
-    subs = {k: windows_on_grid(g, load(TREMOR_TABLE[k])) for k in SUBSTITUTE_TREMOR}
+    subs = {}
+    for k in SUBSTITUTE_TREMOR:
+        d = source(k)
+        subs[k] = on_grid(g, d["t"].to_numpy(), d["v"].to_numpy())
     primary = v.copy()
     ctx = 86400 // GRID_S
     for i0, i1 in runs(np.isnan(v)):
@@ -195,7 +209,7 @@ def build_tremor(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
             if np.isnan(s[gap]).all():
                 continue
             m = ~np.isnan(primary[lo:hi]) & ~np.isnan(s[lo:hi]) & (s[lo:hi] > 0)
-            if m.sum() < 24:
+            if m.sum() < 6:
                 continue
             ratio = float(np.exp(np.median(np.log(primary[lo:hi][m] / s[lo:hi][m]))))
             take = np.zeros(len(g), bool)

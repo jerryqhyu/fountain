@@ -52,6 +52,22 @@ def test_labels_censoring():
     assert np.isnan(y[2])       # horizon not yet elapsed -> censored
 
 
+def test_labels_ignore_onsets_after_the_cutoff():
+    # an onset 5 h ahead is in the catalog, but a model fitted at t = 2 h cannot know it yet
+    df = pd.DataFrame({"next_onset": [5 * 3600.0] * 3}, index=[0, 3600, 7200])
+    y = labels(df, 1, now=2 * 3600)
+    assert y[0] == 0.0 and y[1] == 0.0  # their hour had passed without an onset
+    assert np.isnan(y[2])
+
+
+def test_month_starts_are_hst_month_boundaries():
+    from app.model.service import month_starts
+    assert month_starts(hst(2025, 6, 30, 23, 0)) == []  # warm-up: nothing is predicted before July 2025
+    assert month_starts(hst(2025, 7, 1, 0, 0)) == [hst(2025, 7, 1)]
+    got = month_starts(hst(2026, 1, 15))
+    assert got[0] == hst(2025, 7, 1) and got[-1] == hst(2026, 1, 1) and len(got) == 7
+
+
 def test_classify_precursor_not_onset():
     txt = "Episode 55 precursory overflows started from the north vent at 12:45 p.m."
     phases = {p for _, p, _ in classify(txt)}
@@ -69,9 +85,21 @@ def test_parse_event_time():
 
 def test_on_grid_uses_array_start():
     from app.stitch import on_grid
-    g = np.arange(1790000000, 1790000000 + 3000, 300)
-    out = on_grid(g, np.array([1790000600, 1790001500]), np.array([1.0, 2.0]))
+    g = np.arange(1790000000, 1790000000 + 36000, 3600)
+    out = on_grid(g, np.array([1790007200, 1790018000]), np.array([1.0, 2.0]))
     assert out[2] == 1.0 and out[5] == 2.0 and np.isnan(out[0])
+
+
+def test_hourly_slot_holds_only_the_hour_before_it():
+    from app.stitch import hourly
+    h = 1790002800  # a top of the hour
+    # 5-minute means keyed by bin start: the 00:55 bin ends at the slot, the 01:00 bin belongs to the next
+    d = pd.DataFrame({"t": [h - 3600, h - 300, h], "v": [1.0, 3.0, 9.0]})
+    out = hourly(d, 300).set_index("t")["v"]
+    assert out[h] == 2.0 and out[h + 3600] == 9.0
+    # point samples: one taken exactly on the hour is already known at that slot
+    out = hourly(pd.DataFrame({"t": [h - 1800, h, h + 300], "v": [1.0, 3.0, 9.0]}), 0).set_index("t")["v"]
+    assert out[h] == 2.0 and out[h + 3600] == 9.0
 
 
 def test_robust_rate_ignores_short_step():

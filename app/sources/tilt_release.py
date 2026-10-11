@@ -76,7 +76,7 @@ def parse_zip(blob: bytes) -> pd.DataFrame:
                              index=pd.to_datetime(df[tcol], utc=True, format="ISO8601"))
             d = d[d.index >= pd.Timestamp(GRID_START, unit="s", tz="UTC")].dropna()
             if len(d):
-                # label each 5-min mean by its bin start, matching the grid slot
+                # label each 5-min mean by its bin start
                 frames.append(d.resample("5min").mean().dropna())
     if not frames:
         return pd.DataFrame(columns=["east", "north"])

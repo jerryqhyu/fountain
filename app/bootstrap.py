@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 from . import db, pipeline
-from .config import DATA_DIR, GRID_S, GRID_START
+from .config import DATA_DIR, GRID_START
 from .episodes import catalog
 from .sources import comcat, firms, hans, hvo_messages, rsam, tilt_plots, tilt_release, usgs_status, weather
 
@@ -49,7 +49,7 @@ def import_legacy() -> None:
     db.upsert("src_rsam_uwe", ["t", "v"], [(r["t"], r["ums"]) for r in rows])
     log.info("imported %d UWE RSAM windows", len(rows))
     # earlier HVO plot digitizations: stored offset-aligned at 10-min, convert back to each
-    # plot's own offset and interpolate onto the 5-minute grid
+    # plot's own offset and interpolate onto 5-minute samples
     stitch_info = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM kv WHERE key='tilt_stitch'")}
     import json
     layers = json.loads(stitch_info.get("tilt_stitch", "{}")).get("layers", {})
@@ -65,7 +65,7 @@ def import_legacy() -> None:
             continue
         t = np.array([r["t"] for r in rows], np.int64)
         v = np.array([r["v"] for r in rows], float) - off
-        g = np.arange(int(np.ceil(t[0] / GRID_S)) * GRID_S, int(t[-1]) + 1, GRID_S)
+        g = np.arange(int(np.ceil(t[0] / tilt_plots.SAMPLE_S)) * tilt_plots.SAMPLE_S, int(t[-1]) + 1, tilt_plots.SAMPLE_S)
         gv = np.interp(g, t, v)
         i = np.clip(np.searchsorted(t, g), 1, len(t) - 1)
         ok = (t[i] - t[i - 1]) <= 1200
@@ -101,7 +101,7 @@ def run() -> None:
     step("UWE.QC during legacy outage", rsam.compute_range, "uwe_qc",
          LEGACY_QC_WINDOW[0] - 86400, LEGACY_QC_WINDOW[1] + 86400)
     step("substitute stations for UWE gaps", rsam.fill_substitutes, GRID_START, now)
-    step("stitch, frame, train, infer", pipeline.rebuild)
+    step("stitch, frame, train", pipeline.rebuild, True)
 
 
 if __name__ == "__main__":

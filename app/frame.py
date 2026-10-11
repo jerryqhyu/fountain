@@ -1,8 +1,8 @@
-"""The feature frame: one row per 5-minute grid slot, computed from the stitched series.
+"""The feature frame: one row per hourly grid slot, computed from the stitched series.
 
 Every feature at slot t uses only data at or before t, so the same frame serves training
 (historical rows) and inference (latest rows). A feature is NaN when its inputs are
-genuinely missing; the models then return None for that slot.
+genuinely missing; the model then returns None for that slot.
 """
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ from .stitch import grid, on_grid
 
 FEATURES = [
     "hours_since_end", "recovery_ratio", "inflation_urad", "gap_to_onset_urad", "last_deflation_urad",
-    "tilt_rate_6h", "tilt_rate_24h", "rsam_log", "rsam_ratio_log", "rsam_trend_log",
-    "eq_summit_ew", "eq_all_ew", "precursor",
+    "tilt_rate_6h", "tilt_rate_24h", "rsam_log", "rsam_ratio_log",
+    "eq_summit_ew", "precursor",
 ]
 LABELS = {
     "hours_since_end": "Time since last episode ended",
@@ -33,9 +33,7 @@ LABELS = {
     "tilt_rate_24h": "Tilt rate (24 h, median of hourly changes)",
     "rsam_log": "Tremor level (RSAM)",
     "rsam_ratio_log": "Tremor 1 h vs 24 h",
-    "rsam_trend_log": "Tremor 1 h vs 6 h",
     "eq_summit_ew": "Summit earthquakes (6 h-weighted)",
-    "eq_all_ew": "Regional earthquakes (6 h-weighted)",
     "precursor": "HVO reports precursory activity (fading)",
 }
 SLOTS_PER_H = 3600 // GRID_S
@@ -146,9 +144,9 @@ def build(t0: int | None = None, t1: int | None = None) -> pd.DataFrame:
     df["last_end"] = np.where(has, ends[li], np.nan).astype(float)
     df["next_onset"] = np.where(nxt < len(starts), starts[np.minimum(nxt, len(starts) - 1)], np.nan).astype(float)
 
-    # current level = median of whatever arrived in the last hour: live inputs lag 10–40 min
+    # a slot is already the median of whatever arrived in its hour: live inputs lag 10–40 min
     # (HVO's 2-day plot), so only a full hour without data counts as a genuine gap
-    v = tilt.rolling(SLOTS_PER_H, min_periods=1).median().to_numpy()
+    v = tilt.to_numpy()
     trough = eps["trough_v"].to_numpy(float)[li]
     onset = eps["onset_v"].to_numpy(float)[li]
     defl = eps["defl"].to_numpy(float)[li]
@@ -162,29 +160,25 @@ def build(t0: int | None = None, t1: int | None = None) -> pd.DataFrame:
     df["tilt_rate_24h"] = robust_rate(tilt, 24).to_numpy()
     df["tilt_value"] = v
 
-    r1 = rsam.rolling(SLOTS_PER_H, min_periods=1).median()
-    r6 = rsam.rolling(6 * SLOTS_PER_H, min_periods=3 * SLOTS_PER_H).median()
     r24 = rsam.rolling(24 * SLOTS_PER_H, min_periods=12 * SLOTS_PER_H).median()
     with np.errstate(invalid="ignore", divide="ignore"):
-        df["rsam_log"] = np.log10(r1).to_numpy()
-        df["rsam_ratio_log"] = np.log10(r1 / r24).to_numpy()
-        df["rsam_trend_log"] = np.log10(r1 / r6).to_numpy()
-    df["rsam_1h_ums"] = r1.to_numpy()
+        df["rsam_log"] = np.log10(rsam).to_numpy()
+        df["rsam_ratio_log"] = np.log10(rsam / r24).to_numpy()
+    df["rsam_1h_ums"] = rsam.to_numpy()
 
     # exponentially weighted counts (sum of exp(-age/τ)) instead of a fixed 24 h window, so a swarm
     # fades smoothly rather than counting in full for a day and then dropping off a cliff
     decay = np.exp(-GRID_S / (EQ_TAU_H * 3600))
 
-    def counts(region: str | None) -> np.ndarray:
-        sql = "SELECT t FROM earthquakes" + (" WHERE region=?" if region else "") + " ORDER BY t"
-        ev = np.array([r["t"] for r in db.query(sql, (region,) if region else ())], np.int64)
+    def counts(region: str) -> np.ndarray:
+        ev = np.array([r["t"] for r in db.query("SELECT t FROM earthquakes WHERE region=? ORDER BY t", (region,))],
+                      np.int64)
         idx = np.searchsorted(g, ev, side="left")  # first slot at or after each event
         idx = idx[(ev >= g[0] - GRID_S) & (idx < len(g))]
         per_slot = np.bincount(idx, minlength=len(g)).astype(float)
         return lfilter([1.0], [1.0, -decay], per_slot)
 
     df["eq_summit_ew"] = counts("summit")
-    df["eq_all_ew"] = counts(None)
 
     ps = suggest.precursor_series()
     prec = np.zeros(len(g))

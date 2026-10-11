@@ -8,7 +8,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterable
 
-from .config import DB_PATH
+from .config import DB_PATH, GRID_S
 
 _write_lock = threading.Lock()
 
@@ -27,14 +27,20 @@ SERIES_SOURCE_TABLES = {
     "src_rsam_rimd": "t INTEGER PRIMARY KEY, v REAL",
 }
 
-# Feature frame columns (one row per 5-minute grid slot).
+# Feature frame columns (one row per hourly grid slot).
 FRAME_COLUMNS = [
     "in_episode", "last_label", "last_end", "next_onset",
     "hours_since_end", "recovery_ratio", "inflation_urad", "gap_to_onset_urad", "last_deflation_urad",
     "tilt_rate_6h", "tilt_rate_24h", "tilt_value",
-    "rsam_log", "rsam_ratio_log", "rsam_trend_log", "rsam_1h_ums",
-    "eq_summit_ew", "eq_all_ew", "precursor",
+    "rsam_log", "rsam_ratio_log", "rsam_1h_ums",
+    "eq_summit_ew", "precursor",
 ]
+# Tables derived from the sources: dropped and rebuilt by the pipeline when their layout changes.
+DERIVED_TABLES = {
+    "frame": "t INTEGER PRIMARY KEY, " + ", ".join(f"{c} {'TEXT' if c == 'last_label' else 'REAL'}" for c in FRAME_COLUMNS),
+    # out-of-sample P(onset within 12 h); NULL where an input is missing or an episode is under way
+    "pred_hazard": "t INTEGER PRIMARY KEY, p12 REAL",
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_health (
@@ -78,17 +84,11 @@ CREATE TABLE IF NOT EXISTS firms (
 );
 CREATE INDEX IF NOT EXISTS firms_t ON firms(t);
 
--- stitched series on the 5-minute grid (src = which source supplied the slot)
+-- stitched series on the hourly grid (src = which source supplied the slot)
 CREATE TABLE IF NOT EXISTS series_tilt (t INTEGER PRIMARY KEY, v REAL, src TEXT);
 CREATE TABLE IF NOT EXISTS series_rsam (t INTEGER PRIMARY KEY, v REAL, src TEXT);
-
--- model outputs on the grid; NULL where an input is genuinely missing or an episode is under way
-CREATE TABLE IF NOT EXISTS pred_hazard (t INTEGER PRIMARY KEY, p12 REAL, p24 REAL, p72 REAL);
-CREATE TABLE IF NOT EXISTS pred_ml (t INTEGER PRIMARY KEY, p12 REAL, p24 REAL, p72 REAL);
-""" + "".join(f"CREATE TABLE IF NOT EXISTS {name} ({cols});\n" for name, cols in SERIES_SOURCE_TABLES.items()) + (
-    "CREATE TABLE IF NOT EXISTS frame (t INTEGER PRIMARY KEY, "
-    + ", ".join(f"{c} {'TEXT' if c == 'last_label' else 'REAL'}" for c in FRAME_COLUMNS) + ");\n"
-)
+""" + "".join(f"CREATE TABLE IF NOT EXISTS {name} ({cols});\n"
+              for name, cols in {**SERIES_SOURCE_TABLES, **DERIVED_TABLES}.items())
 
 
 def connect() -> sqlite3.Connection:
@@ -101,10 +101,17 @@ def connect() -> sqlite3.Connection:
 
 def init() -> None:
     with connect() as c:
-        have = [r[1] for r in c.execute("PRAGMA table_info(frame)")]
-        if have and have != ["t"] + FRAME_COLUMNS:  # derived table: rebuilt by pipeline.rebuild()
-            c.execute("DROP TABLE frame")
+        for name, cols in DERIVED_TABLES.items():
+            have = [r[1] for r in c.execute(f"PRAGMA table_info({name})")]
+            if have and have != [x.split()[0] for x in cols.split(", ")]:
+                c.execute(f"DROP TABLE {name}")
+        c.execute("DROP TABLE IF EXISTS pred_ml")
         c.executescript(SCHEMA)
+        # rows left over from a different grid spacing: clear everything built on the grid
+        if c.execute("SELECT 1 FROM series_tilt WHERE t % ? LIMIT 1", (GRID_S,)).fetchone() or \
+                c.execute("SELECT 1 FROM series_rsam WHERE t % ? LIMIT 1", (GRID_S,)).fetchone():
+            for name in ("series_tilt", "series_rsam", *DERIVED_TABLES):
+                c.execute(f"DELETE FROM {name}")
 
 
 @contextmanager

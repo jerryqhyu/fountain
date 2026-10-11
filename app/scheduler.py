@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -18,15 +17,10 @@ EXPECTED_INTERVAL_S = {
     "firms": 1800, "weather": 1800,
     "uwd_release": 86400, "sdh_release": 86400, "uwd_plot2d": 600, "uwd_plot3m": 3600,
     "uwe": 600, "uwe_qc": 600,
-    "stitch": 300, "frame": 300, "infer": 300, "train": 86400,
+    "stitch": 300, "frame": 300, "infer": 300, "train": 31 * 86400,
 }
 
 _sched: BackgroundScheduler | None = None
-
-
-def _next_rebuild_delay() -> int:
-    trained = (db.kv_get("model_meta") or {}).get("trained_at")
-    return int(max(300, trained + 86400 - time.time())) if trained else 86400
 
 
 def _jobs():
@@ -42,7 +36,7 @@ def _jobs():
         (firms.fetch, 1800, 30), (weather.fetch, 1800, 35), (catalog.fetch, 6 * 3600, 40),
         (tilt_release.fetch_uwd, 86400, 120), (tilt_release.fetch_sdh, 86400, 150),
         (pipeline.update, 300, 90),
-        (pipeline.rebuild, 86400, _next_rebuild_delay()),  # daily, counted from the last training
+        (pipeline.rebuild, 86400, 86400),
     ]
 
 
