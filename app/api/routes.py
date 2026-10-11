@@ -262,6 +262,7 @@ def predictions(hours: float = Query(168, gt=0, le=24 * 800), start: int | None 
     return {"t": p["t"].astype(int).tolist(), "p12": [None if pd.isna(x) else round(float(x), 5) for x in p["p12"]],
             "horizon_h": service.HORIZON_H, "version": meta.get("version"),
             "refits": [c for c in meta.get("refits", []) if t0 <= c <= t1],
+            "missing": service.missing_spans(t0, t1),
             "first_prediction": meta.get("first_prediction"), "trained_at": meta.get("trained_at")}
 
 

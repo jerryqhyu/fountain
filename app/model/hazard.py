@@ -91,8 +91,11 @@ class HazardModel:
         return self
 
     def hazard(self, df: pd.DataFrame) -> np.ndarray:
-        X, _ = self._design(self._prep(df))
-        return self.clf_.predict_proba(X)[:, 1]
+        x = self._prep(df)
+        X, _ = self._design(x)
+        h = self.clf_.predict_proba(X)[:, 1]
+        h[x.isna().any(axis=1).to_numpy()] = np.nan  # no imputation: a missing input means no estimate
+        return h
 
     def predict(self, df: pd.DataFrame, horizons=(12,)) -> dict[int, np.ndarray]:
         Hmax = max(horizons)

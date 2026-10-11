@@ -23,6 +23,7 @@ from .. import db, frame
 from ..config import DATA_DIR, HST
 from ..frame import FEATURES, LABELS
 from ..sources.base import tracked
+from ..stitch import runs
 from .hazard import GROUPS, HazardModel
 
 log = logging.getLogger("model")
@@ -33,6 +34,7 @@ MODEL_PATH = MODEL_DIR / "walkforward.joblib"
 FIRST_TRAIN_EPISODE = 4  # episodes 1–3 were long/continuous, a different style
 FIRST_PREDICTED_MONTH = (2025, 7)  # warm-up: the first fit sees December 2024 – June 2025
 REQUIRED = list(GROUPS)
+GRACE_SLOTS = 1  # the newest slot may still be waiting for its inputs: live sources lag 10–40 min
 
 
 # ------------------------------------------------------------------ training
@@ -192,7 +194,37 @@ def predictions(t0: int, t1: int | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["t", "p12"])
 
 
+def missing_spans(t0: int, t1: int | None = None) -> list[dict]:
+    """Runs of pause hours in [t0, t1] with no prediction because a required input is missing."""
+    first = (db.kv_get("model_meta", {}) or {}).get("first_prediction")
+    if first is None:
+        return []
+    df = frame.load(max(t0, first), t1)
+    if df.empty:
+        return []
+    t = df.index.to_numpy()
+    gone = df[REQUIRED].astype(float).isna()
+    out = []
+    for i0, i1 in runs(((df["in_episode"] == 0) & gone.any(axis=1)).to_numpy()):
+        feats = [f for f in REQUIRED if gone[f].iloc[i0:i1 + 1].any()]
+        out.append({"from": int(t[i0]), "to": int(t[i1]), "features": feats, "labels": [LABELS.get(f, f) for f in feats]})
+    return out
+
+
 # ------------------------------------------------------------------ latest, for the card
+def current_slot(fr: pd.DataFrame, pr: pd.DataFrame) -> tuple[int, bool]:
+    """(slot the card reports, whether it has a prediction).
+
+    The newest slot with a prediction, looking back only GRACE_SLOTS: beyond that an absent
+    prediction is reported as absent instead of being covered by an older value.
+    """
+    recent = fr.index[-(GRACE_SLOTS + 1):]
+    have = pr[pr["t"].isin(recent)]
+    if len(have):
+        return int(have["t"].iloc[-1]), True
+    return int(recent[0]), False
+
+
 def _episode_in_progress(row: pd.Series) -> tuple[bool, str | None]:
     open_ev = db.query_one("SELECT label FROM episodes WHERE end_t IS NULL ORDER BY start_t DESC LIMIT 1")
     if open_ev:
@@ -239,14 +271,19 @@ def latest() -> dict:
     missing = [f for f in REQUIRED if pd.isna(newest[f])]
     pr = predictions(int(fr.index[0])).dropna()
     pr = pr[pr["t"].isin(fr.index)]
-    if pr.empty:
-        out = {"version": meta["version"], "p12": None, "missing_now": missing}
-    else:
-        last = pr.iloc[-1]
-        t = int(last["t"])
-        row = fr.loc[[t]]
+    t, ok = current_slot(fr, pr)
+    row = fr.loc[[t]]
+    feats = {f: (None if pd.isna(row.iloc[0][f]) else float(row.iloc[0][f])) for f in FEATURES}
+    in_ep, why = _episode_in_progress(row.iloc[0])
+    out = {
+        "version": meta["version"], "t": t, "p12": None, "features": feats, "last_episode": row.iloc[0]["last_label"],
+        "warnings": _warnings(row.iloc[0], meta), "in_episode": in_ep, "in_episode_reason": why,
+        # the newest grid slot may be NULL if an input hasn't arrived yet
+        "newest_slot": int(fr.index[-1]), "missing_now": missing,
+    }
+    if ok:
+        last = pr[pr["t"] == t].iloc[0]
         contrib = m["fits"][-1].contributions(row)
-        feats = {f: (None if pd.isna(row.iloc[0][f]) else float(row.iloc[0][f])) for f in FEATURES}
         top = sorted(contrib.items(), key=lambda kv: -abs(kv[1]))[:5]
         trend = {}
         for hrs in (6, 24):
@@ -255,16 +292,17 @@ def latest() -> dict:
                 trend[f"delta_{hrs}h"] = round(float(last["p12"] - prev.iloc[-1]["p12"]), 4)
         d6 = trend.get("delta_6h", 0.0)
         trend["arrow"] = "up" if d6 > 0.02 else ("down" if d6 < -0.02 else "flat")
-        in_ep, why = _episode_in_progress(row.iloc[0])
-        out = {
-            "version": meta["version"], "t": t, "p12": float(last["p12"]),
-            "trend": trend, "features": feats, "last_episode": row.iloc[0]["last_label"],
+        out.update({
+            "p12": float(last["p12"]), "trend": trend,
             "top_factors": [{"feature": k, "label": LABELS.get(k, k), "value": feats.get(k), "effect": round(v, 4)}
                             for k, v in top if abs(v) > 1e-6],
-            "warnings": _warnings(row.iloc[0], meta), "in_episode": in_ep, "in_episode_reason": why,
-            # the newest grid slot may be NULL if an input hasn't arrived yet
-            "newest_slot": int(fr.index[-1]), "missing_now": missing,
-        }
+        })
+    else:  # no number: say why instead of showing an older one
+        gone = [f for f in REQUIRED if feats[f] is None]
+        out["reason"] = "episode" if row.iloc[0]["in_episode"] == 1 else ("feature_missing" if gone else "pending")
+        out["missing"] = [{"feature": f, "label": LABELS.get(f, f)} for f in gone]
+        if len(pr):
+            out["last_valid"] = {"t": int(pr.iloc[-1]["t"]), "p12": float(pr.iloc[-1]["p12"])}
     return {"model": out,
             "training": {k: meta.get(k) for k in ("trained_at", "version", "horizon_h", "n_rows", "n_onsets", "cycles",
                                                   "train_start", "fit_through", "first_prediction", "refits",
