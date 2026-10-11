@@ -67,7 +67,7 @@ sources (one table each, native resolution)
 | tilt | SDH USGS release | `src_tilt_sdh_release` | per-gap fit UWD ≈ a·E + b·N + c on ±5 days of pause data; used if R² ≥ 0.9 | daily |
 | tremor | UWE HHZ (EarthScope FDSN) | `src_rsam_uwe` | 10-min RSAM, 1–5 Hz, µm/s; a slot is the median of its hour's windows | 10 min |
 | tremor | UWE.QC HHZ | `src_rsam_uwe_qc` | as-is (agrees with UWE to ~1%) | 10 min |
-| tremor | OBL, UWB, RIMD HHZ | `src_rsam_obl` … | fetched only around UWE gaps; scaled by the median UWE/substitute ratio within 24 h | on gaps |
+| tremor | OBL, UWB, RIMD HHZ | `src_rsam_obl` … | fetched only around UWE gaps; scaled by the median UWE/substitute ratio within 24 h, rejected if that ratio is outside 0.1–10 (dead sensor) | on gaps |
 | events | USGS ComCat | `earthquakes` | exponentially weighted summit count (6 h e-folding) | 5 min |
 | events | HVO notices (HANS) | `notices` | precursory-activity keyword flag, valid 36 h | 12 min |
 | events | HVO observatory messages ("Kilauea Message") | `messages` | display only (posts between Daily Updates) | 10 min |

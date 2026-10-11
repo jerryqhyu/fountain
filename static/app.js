@@ -307,7 +307,7 @@ function sourcesTable(d, colors, kind) {
     if (s.mapping?.offset != null && s.key !== "uwd_release") map = `offset ${s.mapping.offset >= 0 ? "+" : ""}${num(s.mapping.offset, 3)} µrad`;
     else if (s.mapping && "offset" in s.mapping && s.mapping.offset == null) map = "not aligned (no overlap)";
     if (s.mapping?.fits?.length) map = s.mapping.fits.map((f) => `${f.used ? "used" : "rejected"} R²=${f.r2}`).join(", ");
-    if (s.mapping?.ratios?.length) map = s.mapping.ratios.map((r) => `×${num(r.ratio, 3)}`).join(", ");
+    if (s.mapping?.ratios?.length) map = s.mapping.ratios.map((r) => (r.used === false ? `rejected ×${Number(r.ratio).toPrecision(2)}` : `×${num(r.ratio, 3)}`)).join(", ");
     const h = s.health || {};
     return `<tr><td><span class="sw" style="background:${css(colors[s.key])}"></span>${esc(s.label)}</td>
       <td class="num">${total ? ((100 * n) / total).toFixed(n && n / total < 0.001 ? 3 : 1) + "%" : "—"}</td>

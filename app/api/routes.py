@@ -8,7 +8,7 @@ import pandas as pd
 from fastapi import APIRouter, Query
 
 from .. import db, frame, stitch
-from ..config import GRID_S, HST
+from ..config import GRID_S, HST, RATIO_BAND
 from ..episodes import catalog, suggest
 from ..model import service
 from ..scheduler import EXPECTED_INTERVAL_S
@@ -173,11 +173,16 @@ def tremor(hours: float = HOURS, start: int | None = START, end: int | None = EN
         mapping: dict = {"scale": 1.0}
         if s.key in SUBSTITUTE_TREMOR:  # show substitutes scaled the way they were used, around their gaps
             parts, used = [], []
+            ref = stitched.set_index("t")["v"]
             for r in info.get("ratios", []):
                 if r["station"] == s.key and r["to"] >= t0 - 86400 and r["from"] <= t1 + 86400:
-                    w = d[(d["t"] >= r["from"] - 86400) & (d["t"] <= r["to"] + 86400)]
-                    parts.append(w.assign(v=w["v"] * r["ratio"]))
                     used.append(r)
+                    if not r.get("used", True):  # rejected at stitch time: listed in the table, not drawn
+                        continue
+                    w = d[(d["t"] >= r["from"] - 86400) & (d["t"] <= r["to"] + 86400)]
+                    w = w.assign(v=w["v"] * r["ratio"])
+                    rel = w["v"] / w["t"].map(ref)  # context from a sensor that failed near the gap is not drawn
+                    parts.append(w[rel.between(*RATIO_BAND)])
             d = pd.concat(parts) if parts else d.iloc[0:0]
             mapping = {"ratios": used}
         d = d[d["t"] >= t0]

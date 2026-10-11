@@ -102,6 +102,45 @@ def test_hourly_slot_holds_only_the_hour_before_it():
     assert out[h] == 2.0 and out[h + 3600] == 9.0
 
 
+def test_tremor_substitute_with_implausible_scale_is_rejected(monkeypatch):
+    from app import stitch
+    g = np.arange(1790002800, 1790002800 + 72 * 3600, 3600)
+    gap = slice(30, 34)
+    uwe = np.full(len(g), 0.25)
+    uwe[gap] = np.nan
+    # UWB is railed (thousands of µm/s whatever the ground does); RIMD is healthy at 0.8× UWE
+    level = {"uwe": uwe, "uwb": np.full(len(g), 5000.0), "rimd": np.full(len(g), 0.2)}
+
+    def source(key, cols="t, v"):
+        v = level.get(key, np.full(len(g), np.nan))
+        return pd.DataFrame({"t": g, "v": v}).dropna()
+
+    monkeypatch.setattr(stitch, "source", source)
+    v, src, info = stitch.build_tremor(g)
+    assert set(src[gap]) == {"rimd"} and np.allclose(v[gap], 0.25)
+    assert [(r["station"], r["used"]) for r in info["ratios"]] == [("uwb", False), ("rimd", True)]
+    assert info["ratios"][0]["ratio"] == 5e-05
+    # with no plausible substitute the slots stay a genuine gap, and the rejection is still recorded
+    del level["rimd"]
+    v, src, info = stitch.build_tremor(g)
+    assert np.isnan(v[gap]).all() and not src[gap].any()
+    assert [(r["station"], r["used"]) for r in info["ratios"]] == [("uwb", False)]
+
+
+def test_substitute_fetch_does_not_count_a_dead_sensor_as_cover(monkeypatch):
+    from app.sources import rsam
+    level = {"src_rsam_uwe": 0.25, "src_rsam_uwb": 5000.0, "src_rsam_rimd": 0.2}
+
+    def query(sql, params=()):
+        v = next((v for table, v in level.items() if f"FROM {table} " in sql), None)
+        return [] if v is None else [{"t": t, "v": v} for t in range(0, 6000, 600)]
+
+    monkeypatch.setattr(rsam.db, "query", query)
+    assert not rsam.plausible("uwb", 0, 6000)
+    assert rsam.plausible("rimd", 0, 6000)
+    assert rsam.plausible("obl", 0, 6000)  # no overlap to judge by: left to stitching
+
+
 def test_robust_rate_ignores_short_step():
     import numpy as np
     import pandas as pd

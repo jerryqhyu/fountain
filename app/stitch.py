@@ -10,7 +10,9 @@ tilt   - HVO plot digitizations carry an arbitrary per-plot offset: aligned by t
        - SDH fills remaining UWD gaps through UWD ≈ a·east + b·north + c fitted on the
          pause-time slots within 5 days of the gap; used only if R² ≥ 0.9.
 tremor - a slot is the median of the 10-minute RSAM windows in its hour. UWE.QC is used as-is (~1% from UWE);
-         OBL/UWB/RIMD are scaled by the median UWE/substitute ratio within 24 h of the gap.
+         OBL/UWB/RIMD are scaled by the median UWE/substitute ratio within 24 h of the gap; a ratio
+         outside RATIO_BAND means the substitute is not recording ground motion (dead or railed
+         sensor), so it is rejected and the next substitute, or a genuine gap, is used instead.
 
 The stitched series and the per-source mappings (offsets, fits, ratios) are stored so the
 dashboard can show every source next to the authoritative series.
@@ -24,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from . import db
-from .config import GRID_S, GRID_START, RSAM_WINDOW_S
+from .config import GRID_S, GRID_START, RATIO_BAND, RSAM_WINDOW_S
 from .sources import SUBSTITUTE_TREMOR, TILT_SOURCES, TREMOR_SOURCES
 from .sources.base import tracked
 
@@ -212,10 +214,14 @@ def build_tremor(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
             if m.sum() < 6:
                 continue
             ratio = float(np.exp(np.median(np.log(primary[lo:hi][m] / s[lo:hi][m]))))
+            used = RATIO_BAND[0] <= ratio <= RATIO_BAND[1]
+            info["ratios"].append({"from": int(g[i0]), "to": int(g[i1]), "station": key,
+                                   "ratio": float(f"{ratio:.4g}"), "used": used})
+            if not used:
+                continue
             take = np.zeros(len(g), bool)
             take[gap] = ~np.isnan(s[gap])
             v[take], src[take] = s[take] * ratio, key
-            info["ratios"].append({"from": int(g[i0]), "to": int(g[i1]), "station": key, "ratio": round(ratio, 4)})
             break
     return v, src, info
 

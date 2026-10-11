@@ -5,6 +5,8 @@ RSAM = mean absolute amplitude of the 1–5 Hz band-passed vertical velocity (µ
 
 UWE and UWE.QC are polled live. Substitute stations (OBL, UWB, RIMD) are only computed
 around gaps in UWE∪UWE.QC, with 24 h of context either side for scaling at stitch time.
+A substitute whose level is implausible against UWE (a dead sensor) does not count as
+covering a gap, so the next station is fetched too.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from obspy.clients.fdsn import Client
 from obspy.clients.fdsn.header import FDSNNoDataException
 
 from .. import db
-from ..config import FDSN_BASE, RSAM_BAND, RSAM_WINDOW_S, TREMOR_CHA, TREMOR_NET
+from ..config import FDSN_BASE, RATIO_BAND, RSAM_BAND, RSAM_WINDOW_S, TREMOR_CHA, TREMOR_NET
 from . import SUBSTITUTE_TREMOR, TREMOR_SOURCES, TREMOR_STATIONS
 from .base import mark, tracked
 
@@ -151,8 +153,17 @@ def primary_gaps(t0: int, t1: int) -> list[tuple[int, int]]:
     return runs
 
 
+def plausible(key: str, t0: int, t1: int) -> bool:
+    """False if the substitute's level in [t0, t1] is outside RATIO_BAND of UWE's (stitching rejects it)."""
+    prim = {r["t"]: r["v"] for table in ("src_rsam_uwe_qc", "src_rsam_uwe")
+            for r in db.query(f"SELECT t, v FROM {table} WHERE t>=? AND t<=?", (t0, t1))}
+    lr = [np.log(prim[r["t"]] / r["v"])
+          for r in db.query(f"SELECT t, v FROM {TABLE[key]} WHERE t>=? AND t<=? AND v>0", (t0, t1)) if r["t"] in prim]
+    return len(lr) < 6 or RATIO_BAND[0] <= float(np.exp(np.median(lr))) <= RATIO_BAND[1]
+
+
 def fill_substitutes(t0: int, t1: int, ctx_s: int = 86400) -> str:
-    """Compute substitute-station RSAM around each primary gap (first station with data wins)."""
+    """Compute substitute-station RSAM around each primary gap (first station with plausible data wins)."""
     done, unfilled = 0, 0
     attempted = set(db.kv_get("subst_attempted", []))
     now = time.time()
@@ -171,7 +182,7 @@ def fill_substitutes(t0: int, t1: int, ctx_s: int = 86400) -> str:
                 mark(key, False, error=str(e))
                 continue
             n = db.query_one(f"SELECT COUNT(*) AS n FROM {TABLE[key]} WHERE t>=? AND t<=?", (g0, g1))["n"]
-            if n:
+            if n and plausible(key, g0 - ctx_s, g1 + ctx_s):
                 done += 1
                 break
         else:
