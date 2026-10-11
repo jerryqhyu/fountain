@@ -502,4 +502,10 @@ function initTheme() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderSeries);
 }
 
-window.addEventListener("DOMContentLoaded", () => { initTheme(); initControls(); refresh(); setInterval(refresh, 120000); });
+function initKofi() {
+  if (!window.kofiwidget2) return;  // widget script blocked or offline
+  kofiwidget2.init("Support me on Ko-fi", "#c20000", "A0R028KOSI");
+  $("kofi").innerHTML = kofiwidget2.getHTML();
+}
+
+window.addEventListener("DOMContentLoaded", () => { initTheme(); initControls(); initKofi(); refresh(); setInterval(refresh, 120000); });

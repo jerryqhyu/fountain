@@ -88,9 +88,13 @@ button { font: inherit; color: var(--ink); cursor: pointer; }
 .title { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
 .subtitle { font-size: 13px; color: var(--muted); }
 .masthead-right { display: flex; align-items: center; gap: 14px; }
+#kofi:empty { display: none; }
 
-main.wrap { display: flex; flex-direction: column; gap: 40px; padding-top: 28px; padding-bottom: 40px; }
+main.wrap { display: flex; flex-direction: column; gap: 28px; padding-top: 28px; padding-bottom: 40px; }
 .section { display: flex; flex-direction: column; gap: 16px; }
+/* a group box: everything that belongs to one part of the page sits inside one frame */
+.group { padding: 20px 22px 22px; border: 1px solid var(--hair); border-radius: 22px;
+  background: color-mix(in srgb, var(--surface) 45%, var(--page)); }
 
 /* ---------- official ---------- */
 .status-hero { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: center;
@@ -179,7 +183,7 @@ table.skill td, table.skill th { padding: 5px 10px 5px 0; border-bottom: 1px sol
 
 /* ---------- sticky controls ---------- */
 .controls { position: sticky; top: 10px; z-index: 10; display: flex; justify-content: space-between; align-items: center; gap: 16px;
-  flex-wrap: wrap; padding: 10px 14px; margin: -16px 0; border-radius: 999px; border: 1px solid var(--hair);
+  flex-wrap: wrap; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--hair);
   background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   box-shadow: var(--shadow); }
 .control { display: flex; align-items: center; gap: 10px; }
@@ -228,6 +232,7 @@ tr.nonfount td { color: var(--muted); font-style: italic; }
   #refreshed { display: none; }
   .section-title { font-size: 21px; }
   .status-hero, .notice, .model-card, .panel { padding: 16px; }
+  .group { padding: 14px 12px 12px; border-radius: 18px; }
   .status-codes { flex-direction: column; width: 100%; }
   .code { min-width: 0; }
   .tile { padding: 10px 12px; }
