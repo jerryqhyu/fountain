@@ -53,7 +53,7 @@ def start() -> BackgroundScheduler:
         _sched.add_job(fn, "interval", seconds=every, next_run_time=now + timedelta(seconds=delay),
                        id=name, name=name, jitter=min(30, every // 20))
     _sched.start()
-    if not db.query_one("SELECT 1 AS x FROM src_tilt_uwd_release LIMIT 1"):
+    if not db.kv_get("bootstrap_done"):  # first start, or the last bootstrap was cut short by a restart
         from . import bootstrap
         threading.Thread(target=bootstrap.run, daemon=True, name="bootstrap").start()
     log.info("scheduler started with %d jobs", len(_sched.get_jobs()))

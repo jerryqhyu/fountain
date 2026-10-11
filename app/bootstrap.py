@@ -2,8 +2,9 @@
 
     uv run python -m app.bootstrap
 
-Every step is idempotent. Without data/volcano.db everything is downloaded (≈1 h, mostly
-UWE tremor history from EarthScope).
+Every step is idempotent, so the server reruns it on start until one run has reached the end:
+a restart in the middle resumes where it stopped. Without data/volcano.db everything is
+downloaded (≈1 h, mostly UWE tremor history from EarthScope).
 """
 from __future__ import annotations
 
@@ -102,6 +103,7 @@ def run() -> None:
          LEGACY_QC_WINDOW[0] - 86400, LEGACY_QC_WINDOW[1] + 86400)
     step("substitute stations for UWE gaps", rsam.fill_substitutes, GRID_START, now)
     step("stitch, frame, train", pipeline.rebuild, True)
+    db.kv_set("bootstrap_done", int(time.time()))
 
 
 if __name__ == "__main__":
