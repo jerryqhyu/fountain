@@ -29,8 +29,8 @@ Docker (untested on this machine, which has no Docker): `docker compose up --bui
 
 On first start with an empty database the server runs `app/bootstrap.py` in the background:
 it imports anything an older `data/volcano.db` already fetched, downloads the rest (≈1 h, mostly
-UWE tremor history), then builds the grid and trains. Run it by hand with
-`uv run python -m app.bootstrap`.
+UWE tremor history), then builds the grid and trains. If the server restarts before it has
+finished, the next start resumes it. Run it by hand with `uv run python -m app.bootstrap`.
 
 Optional `.env` keys: `FIRMS_MAP_KEY`, `DATA_DIR`, `DISABLE_SCHEDULER=1`.
 
