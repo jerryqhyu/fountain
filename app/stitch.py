@@ -4,13 +4,20 @@ Every source is first reduced to one value per slot: the median of its samples f
 that ends at the slot. For every slot the first source in priority order that has a value wins (see
 sources/__init__.py). Sources that are not directly comparable are mapped first:
 
-tilt   - HVO plot digitizations carry an arbitrary per-plot offset: aligned by the median
+tilt   - the USGS release restarts on an arbitrary baseline wherever the tiltmeter was re-levelled
+         (a new CSV after a data gap, see sources/tilt_release.py). The step is measured from
+         straight lines through the 3 h of quiet tilt either side of the gap, compared mid-gap, or,
+         when an episode is too close for that, from a step term in a fit against SDH; earlier
+         segments are then shifted onto the latest baseline.
+       - HVO plot digitizations carry an arbitrary per-plot offset: aligned by the median
          difference over the most recent 10 days of overlap with the series built so far
          (release → 3-month plot → 2-day plot, so the 2-day plot can align via the 3-month).
        - SDH fills remaining UWD gaps through UWD ≈ a·east + b·north + c fitted on the
          pause-time slots within 5 days of the gap; used only if R² ≥ 0.9.
 tremor - a slot is the median of the 10-minute RSAM windows in its hour. UWE.QC is used as-is (~1% from UWE);
-         OBL/UWB/RIMD are scaled by the median UWE/substitute ratio within 24 h of the gap.
+         OBL/UWB/RIMD are scaled by the median UWE/substitute ratio within 24 h of the gap; a ratio
+         outside RATIO_BAND means the substitute is not recording ground motion (dead or railed
+         sensor), so it is rejected and the next substitute, or a genuine gap, is used instead.
 
 The stitched series and the per-source mappings (offsets, fits, ratios) are stored so the
 dashboard can show every source next to the authoritative series.
@@ -24,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from . import db
-from .config import GRID_S, GRID_START, RSAM_WINDOW_S
+from .config import GRID_S, GRID_START, RATIO_BAND, RSAM_WINDOW_S
 from .sources import SUBSTITUTE_TREMOR, TILT_SOURCES, TREMOR_SOURCES
 from .sources.base import tracked
 
@@ -35,6 +42,9 @@ SOURCE_TABLE = {s.key: s.table for s in TILT_SOURCES + TREMOR_SOURCES}
 # bin start, plot digitizations are point samples, RSAM windows are keyed by window start
 SAMPLE_S = {"uwd_release": 300, "sdh_release": 300, "uwd_plot2d": 0, "uwd_plot3m": 0,
             **{s.key: RSAM_WINDOW_S for s in TREMOR_SOURCES}}
+# removing a re-levelling step from the release: tilt this long either side of the gap is extrapolated
+# across it, for gaps up to RELEVEL_MAX_GAP_S; otherwise SDH within RELEVEL_SDH_S carries the tilt across
+RELEVEL_FIT_S, RELEVEL_MAX_GAP_S, RELEVEL_SDH_S = 3 * 3600, 12 * 3600, 2 * 86400
 
 
 # ------------------------------------------------------------------ grid helpers
@@ -83,10 +93,10 @@ def runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(np.where(d == 1)[0], np.where(d == -1)[0] - 1))
 
 
-def episode_mask(g: np.ndarray) -> np.ndarray:
+def episode_mask(g: np.ndarray, pad: int = 0) -> np.ndarray:
     m = np.zeros(len(g), bool)
     for e in db.query("SELECT start_t, end_t FROM episodes"):
-        m |= (g >= e["start_t"]) & (g <= (e["end_t"] or 2**62))
+        m |= (g >= e["start_t"] - pad) & (g <= (e["end_t"] or 2**62) + pad)
     return m
 
 
@@ -121,12 +131,70 @@ def _align(comp: np.ndarray, plot: np.ndarray, days: int = 10) -> float | None:
     return float(np.median(comp[both] - plot[both]))
 
 
+def _step_linear(t: np.ndarray, v: np.ndarray, quiet: np.ndarray, a: int, b: int) -> float | None:
+    """Step across the gap (a, b): a line through the quiet tilt either side, both read at mid-gap."""
+    if b - a > RELEVEL_MAX_GAP_S:
+        return None
+    mid, ends = (a + b) / 2, []
+    for side in ((t > a - RELEVEL_FIT_S) & (t <= a), (t >= b) & (t < b + RELEVEL_FIT_S)):
+        if side.sum() < 24 or not quiet[side].all():
+            return None
+        ends.append(np.polyfit(t[side] - mid, v[side], 1)[1])
+    return float(ends[1] - ends[0])
+
+
+def _step_sdh(j: pd.DataFrame, a: int, b: int, lo: int, hi: int) -> float | None:
+    """Step across the gap from UWD ≈ p·east + q·north + c + step·[after] on quiet samples within 2 days."""
+    d = j[((j["t"] >= max(a - RELEVEL_SDH_S, lo)) & (j["t"] <= a)) | ((j["t"] >= b) & (j["t"] <= min(b + RELEVEL_SDH_S, hi)))]
+    after = (d["t"] >= b).to_numpy(float)
+    if after.sum() < 36 or (1 - after).sum() < 36:
+        return None
+    X = np.column_stack([d["east"], d["north"], np.ones(len(d)), after])
+    y = d["v"].to_numpy(float)
+    coef, *_ = np.linalg.lstsq(X, y, rcond=None)
+    if y.var() == 0 or 1 - (y - X @ coef).var() / y.var() < 0.9:
+        return None
+    return float(coef[3])
+
+
+def relevel_shift(t, relevels: list[dict]) -> np.ndarray:
+    """µrad to add to release samples at times t so that every segment sits on the latest baseline."""
+    t = np.asarray(t, np.int64)
+    out = np.zeros(len(t))
+    for r in relevels:
+        if r.get("offset") is not None:
+            out[t < r["to"]] += r["offset"]
+    return out
+
+
+def relevel(rel: pd.DataFrame, sdh: pd.DataFrame, breaks: list[dict]) -> tuple[pd.DataFrame, list[dict]]:
+    """Remove the baseline step at each re-levelling of UWD (5-minute samples in, same samples out)."""
+    out: list[dict] = []
+    if rel.empty or not breaks:
+        return rel, out
+    t, v = rel["t"].to_numpy(np.int64), rel["v"].to_numpy(float)
+    quiet = ~episode_mask(t, pad=3600)
+    j = rel[quiet].merge(sdh, on="t") if len(sdh) else None
+    breaks = sorted(breaks, key=lambda b: b["to"])
+    for i, b in enumerate(breaks):
+        off, how = _step_linear(t, v, quiet, b["from"], b["to"]), "linear"
+        if off is None and j is not None:
+            lo = breaks[i - 1]["to"] if i else 0
+            hi = breaks[i + 1]["from"] if i + 1 < len(breaks) else 2**62
+            off, how = _step_sdh(j, b["from"], b["to"], lo, hi), "sdh"
+        out.append({"from": b["from"], "to": b["to"], "offset": None if off is None else round(off, 3),
+                    "method": None if off is None else how})
+    return rel.assign(v=v + relevel_shift(t, out)), out
+
+
 def build_tilt(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
     v = np.full(len(g), np.nan)
     src = np.full(len(g), None, dtype=object)
-    info: dict = {"offsets": {}, "sdh_fits": []}
+    info: dict = {"offsets": {}, "sdh_fits": [], "relevels": []}
 
-    rel = source("uwd_release")
+    sdh5 = load(SOURCE_TABLE["sdh_release"], "t, east, north")
+    rel5, info["relevels"] = relevel(load(SOURCE_TABLE["uwd_release"]), sdh5, db.kv_get("release_breaks:UWD", []) or [])
+    rel = hourly(rel5, SAMPLE_S["uwd_release"])
     r = on_grid(g, rel["t"].to_numpy(), rel["v"].to_numpy())
     take = ~np.isnan(r)
     v[take], src[take] = r[take], "uwd_release"
@@ -152,7 +220,7 @@ def build_tilt(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
         v[take], src[take] = plots[key][take] + off, key
 
     # SDH: local linear fit per remaining gap
-    sdh = source("sdh_release", "t, east, north")
+    sdh = hourly(sdh5, SAMPLE_S["sdh_release"])
     if len(sdh):
         e = on_grid(g, sdh["t"].to_numpy(), sdh["east"].to_numpy())
         n = on_grid(g, sdh["t"].to_numpy(), sdh["north"].to_numpy())
@@ -212,10 +280,14 @@ def build_tremor(g: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
             if m.sum() < 6:
                 continue
             ratio = float(np.exp(np.median(np.log(primary[lo:hi][m] / s[lo:hi][m]))))
+            used = RATIO_BAND[0] <= ratio <= RATIO_BAND[1]
+            info["ratios"].append({"from": int(g[i0]), "to": int(g[i1]), "station": key,
+                                   "ratio": float(f"{ratio:.4g}"), "used": used})
+            if not used:
+                continue
             take = np.zeros(len(g), bool)
             take[gap] = ~np.isnan(s[gap])
             v[take], src[take] = s[take] * ratio, key
-            info["ratios"].append({"from": int(g[i0]), "to": int(g[i1]), "station": key, "ratio": round(ratio, 4)})
             break
     return v, src, info
 

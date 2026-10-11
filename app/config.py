@@ -47,6 +47,8 @@ TREMOR_NET, TREMOR_CHA = "HV", "HHZ"
 FDSN_BASE = "https://service.earthscope.org"
 RSAM_WINDOW_S = 600
 RSAM_BAND = (1.0, 5.0)
+# plausible UWE/substitute scale: healthy summit stations sit at 0.8–2.5, a dead or railed one at ~1e-4
+RATIO_BAND = (0.1, 10.0)
 
 # Tilt: UWD az-300 is the radial component HVO uses for episode forecasting.
 TILT_AZIMUTH_DEG = 300.0

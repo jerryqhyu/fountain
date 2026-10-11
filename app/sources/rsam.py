@@ -5,6 +5,8 @@ RSAM = mean absolute amplitude of the 1–5 Hz band-passed vertical velocity (µ
 
 UWE and UWE.QC are polled live. Substitute stations (OBL, UWB, RIMD) are only computed
 around gaps in UWE∪UWE.QC, with 24 h of context either side for scaling at stitch time.
+A substitute whose level is implausible against UWE (a dead sensor) does not count as
+covering a gap, so the next station is fetched too.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from obspy.clients.fdsn import Client
 from obspy.clients.fdsn.header import FDSNNoDataException
 
 from .. import db
-from ..config import FDSN_BASE, RSAM_BAND, RSAM_WINDOW_S, TREMOR_CHA, TREMOR_NET
+from ..config import FDSN_BASE, RATIO_BAND, RSAM_BAND, RSAM_WINDOW_S, TREMOR_CHA, TREMOR_NET
 from . import SUBSTITUTE_TREMOR, TREMOR_SOURCES, TREMOR_STATIONS
 from .base import mark, tracked
 
@@ -70,7 +72,7 @@ def compute(key: str, t0: int, t1: int) -> list[tuple[int, float]]:
     tr2 = tr.copy()
     tr2.data = np.where(np.isnan(x), fill, x)
     tr2.detrend("demean")
-    tr2.taper(0.01)
+    tr2.taper(0.01, max_length=pad)  # inside the padding only: a longer taper dims the first and last window
     tr2.filter("bandpass", freqmin=RSAM_BAND[0], freqmax=RSAM_BAND[1], corners=4, zerophase=True)
     y = np.abs(tr2.data)
     y[mask | np.isnan(x)] = np.nan
@@ -90,15 +92,15 @@ def compute(key: str, t0: int, t1: int) -> list[tuple[int, float]]:
     return out
 
 
-def compute_range(key: str, t0: int, t1: int, sleep_s: float = 0.3) -> int:
-    """Chunked compute + store; skips chunks that are already ≥90% present."""
+def compute_range(key: str, t0: int, t1: int, sleep_s: float = 0.3, force: bool = False) -> int:
+    """Chunked compute + store; skips chunks that are already ≥90% present unless forced."""
     table = TABLE[key]
     n = 0
     t = (t0 // CHUNK_S) * CHUNK_S
     while t < t1:
         te = min(t + CHUNK_S, t1)
         have = db.query_one(f"SELECT COUNT(*) AS n FROM {table} WHERE t>=? AND t<?", (t, te))["n"]
-        if have < 0.9 * (te - t) / RSAM_WINDOW_S:
+        if force or have < 0.9 * (te - t) / RSAM_WINDOW_S:
             for attempt in range(3):
                 try:
                     n += db.upsert(table, ["t", "v"], compute(key, t, te))
@@ -108,6 +110,34 @@ def compute_range(key: str, t0: int, t1: int, sleep_s: float = 0.3) -> int:
                     time.sleep(5 * (attempt + 1))
             time.sleep(sleep_s)
         t = te
+    return n
+
+
+def repair_edges(key: str) -> int:
+    """Recompute the window either side of every 6 h chunk boundary.
+
+    Windows stored before the taper was confined to the padding read ~9 % low there.
+    Resumable: progress is kept in kv.
+    """
+    table = TABLE[key]
+    span = db.query_one(f"SELECT MIN(t) AS a, MAX(t) AS b FROM {table}")
+    if span["a"] is None:
+        return 0
+    n = 0
+    first = max(-(-span["a"] // CHUNK_S) * CHUNK_S, db.kv_get(f"rsam_edges:{key}", 0))
+    for i, b in enumerate(range(first, span["b"] + 1, CHUNK_S)):
+        if db.query_one(f"SELECT COUNT(*) AS n FROM {table} WHERE t IN (?, ?)", (b - RSAM_WINDOW_S, b))["n"]:
+            for attempt in range(3):
+                try:
+                    n += db.upsert(table, ["t", "v"], compute(key, b - RSAM_WINDOW_S, b + RSAM_WINDOW_S))
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.warning("rsam %s edge %s failed (%s)", key, UTCDateTime(b), e)
+                    time.sleep(5 * (attempt + 1))
+            time.sleep(0.1)
+        if i % 50 == 49:
+            db.kv_set(f"rsam_edges:{key}", b)
+    db.kv_set(f"rsam_edges:{key}", span["b"])
     return n
 
 
@@ -151,8 +181,17 @@ def primary_gaps(t0: int, t1: int) -> list[tuple[int, int]]:
     return runs
 
 
+def plausible(key: str, t0: int, t1: int) -> bool:
+    """False if the substitute's level in [t0, t1] is outside RATIO_BAND of UWE's (stitching rejects it)."""
+    prim = {r["t"]: r["v"] for table in ("src_rsam_uwe_qc", "src_rsam_uwe")
+            for r in db.query(f"SELECT t, v FROM {table} WHERE t>=? AND t<=?", (t0, t1))}
+    lr = [np.log(prim[r["t"]] / r["v"])
+          for r in db.query(f"SELECT t, v FROM {TABLE[key]} WHERE t>=? AND t<=? AND v>0", (t0, t1)) if r["t"] in prim]
+    return len(lr) < 6 or RATIO_BAND[0] <= float(np.exp(np.median(lr))) <= RATIO_BAND[1]
+
+
 def fill_substitutes(t0: int, t1: int, ctx_s: int = 86400) -> str:
-    """Compute substitute-station RSAM around each primary gap (first station with data wins)."""
+    """Compute substitute-station RSAM around each primary gap (first station with plausible data wins)."""
     done, unfilled = 0, 0
     attempted = set(db.kv_get("subst_attempted", []))
     now = time.time()
@@ -171,7 +210,7 @@ def fill_substitutes(t0: int, t1: int, ctx_s: int = 86400) -> str:
                 mark(key, False, error=str(e))
                 continue
             n = db.query_one(f"SELECT COUNT(*) AS n FROM {TABLE[key]} WHERE t>=? AND t<=?", (g0, g1))["n"]
-            if n:
+            if n and plausible(key, g0 - ctx_s, g1 + ctx_s):
                 done += 1
                 break
         else:

@@ -53,9 +53,11 @@ def start() -> BackgroundScheduler:
         _sched.add_job(fn, "interval", seconds=every, next_run_time=now + timedelta(seconds=delay),
                        id=name, name=name, jitter=min(30, every // 20))
     _sched.start()
+    from . import bootstrap
     if not db.kv_get("bootstrap_done"):  # first start, or the last bootstrap was cut short by a restart
-        from . import bootstrap
         threading.Thread(target=bootstrap.run, daemon=True, name="bootstrap").start()
+    elif db.kv_get("repairs") != bootstrap.REPAIRS:  # rows stored by an earlier version await correction
+        threading.Thread(target=bootstrap.repair, daemon=True, name="repair").start()
     log.info("scheduler started with %d jobs", len(_sched.get_jobs()))
     return _sched
 
