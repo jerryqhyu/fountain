@@ -91,7 +91,9 @@ def repair() -> None:
     step("SDH release, headerless file", tilt_release.fetch_sdh)
     for key in rsam.TABLE:
         step(f"{key} chunk-edge windows", rsam.repair_edges, key)
-    live_since = (db.kv_get("bootstrap_done") or now) - 6 * 3600  # live windows were dimmed by the same taper
+    # live windows were dimmed by the same taper; polling began when the first sensitivity was cached
+    first = db.query_one("SELECT MIN(updated_at) AS t FROM kv WHERE key LIKE 'sens:%'")["t"] or now
+    live_since = first - 6 * 3600
     for key in ("uwe", "uwe_qc"):
         step(f"{key} live windows", rsam.compute_range, key, live_since, now, 0.3, True)
     step("stitch, frame, train", pipeline.rebuild, True)
@@ -100,6 +102,8 @@ def repair() -> None:
 
 def run() -> None:
     db.init()
+    # a database an earlier version already wrote to (interrupted bootstrap, legacy import) still needs repair()
+    fresh = _legacy() is None and not db.query_one("SELECT COUNT(*) AS n FROM src_rsam_uwe")["n"]
     catalog.seed()
     step("import legacy database", import_legacy)
     now = int(time.time())
@@ -119,8 +123,11 @@ def run() -> None:
          LEGACY_QC_WINDOW[0] - 86400, LEGACY_QC_WINDOW[1] + 86400)
     step("substitute stations for UWE gaps", rsam.fill_substitutes, GRID_START, now)
     step("stitch, frame, train", pipeline.rebuild, True)
-    db.kv_set("repairs", REPAIRS)  # everything above was stored by this version
     db.kv_set("bootstrap_done", int(time.time()))
+    if fresh:
+        db.kv_set("repairs", REPAIRS)  # everything above was stored by this version
+    else:
+        repair()
 
 
 if __name__ == "__main__":
