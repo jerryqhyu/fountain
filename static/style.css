@@ -15,8 +15,9 @@
   --s3: #1baf7a;
   --s4: #eda100;
   --s5: #e87ba4;
-  --episode: rgba(20, 20, 19, 0.095);
-  --episode-alt: rgba(20, 20, 19, 0.04);
+  --episode: rgba(247, 148, 29, 0.34);
+  --episode-alt: rgba(247, 148, 29, 0.20);
+  --missing: rgba(208, 59, 59, 0.18);
   --band: rgba(42, 120, 214, 0.12);
   --brand: #b4461f;
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
@@ -30,7 +31,7 @@
     --ink: #f5f4ef; --ink-2: #c3c2b7; --muted: #8f8d85;
     --hair: #2c2c2a; --grid: #262624; --axis: #3a3a37;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
-    --episode: rgba(245, 244, 239, 0.09); --episode-alt: rgba(245, 244, 239, 0.05);
+    --episode: rgba(247, 148, 29, 0.38); --episode-alt: rgba(247, 148, 29, 0.22); --missing: rgba(224, 72, 72, 0.24);
     --band: rgba(57, 135, 229, 0.18); --brand: #e0764c;
     --shadow: none;
   }
@@ -41,7 +42,7 @@
   --ink: #f5f4ef; --ink-2: #c3c2b7; --muted: #8f8d85;
   --hair: #2c2c2a; --grid: #262624; --axis: #3a3a37;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
-  --episode: rgba(245, 244, 239, 0.09); --episode-alt: rgba(245, 244, 239, 0.05);
+  --episode: rgba(247, 148, 29, 0.38); --episode-alt: rgba(247, 148, 29, 0.22); --missing: rgba(224, 72, 72, 0.24);
   --band: rgba(57, 135, 229, 0.18); --brand: #e0764c;
   --shadow: none;
 }
@@ -145,12 +146,15 @@ pre { white-space: pre-wrap; font: 13px/1.6 system-ui, sans-serif; color: var(--
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--ink-2); align-items: center; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend .swatch { width: 12px; height: 3px; border-radius: 2px; }
-.legend .swatch.gap { height: 10px; background: color-mix(in srgb, var(--muted) 30%, transparent); }
+.legend .swatch.gap { height: 10px; background: var(--missing); }
+.legend .swatch.ep { height: 10px; background: var(--episode); }
 .model-trend { font-size: 12px; color: var(--ink-2); white-space: nowrap; flex-shrink: 0; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); }
 .tiles { display: grid; grid-template-columns: 1fr; gap: 0; border: 1px solid var(--hair); border-radius: 12px; overflow: hidden; }
 .tile { padding: 14px 16px; }
 .tile .h { font-size: 12px; color: var(--muted); }
 .tile.none { background: repeating-linear-gradient(135deg, var(--surface-2) 0 8px, var(--surface) 8px 16px); }
+.tile.none.missing { background: repeating-linear-gradient(135deg, var(--missing) 0 8px, var(--surface) 8px 16px); }
+.tile.none.episode { background: repeating-linear-gradient(135deg, var(--episode-alt) 0 8px, var(--surface) 8px 16px); }
 .tile.none .v { color: var(--muted); }
 .tile .why { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-top: 2px; }
 .tile .v { font-size: 34px; font-weight: 680; letter-spacing: -0.02em; line-height: 1.15; }
