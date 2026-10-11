@@ -151,6 +151,17 @@
     </div>
     <h2 class="section-title">Signals behind the estimate</h2>
 
+    <div class="panel">
+      <div class="panel-head"><div><h3>Summit conditions</h3><div class="muted small">Open-Meteo · NASA FIRMS</div></div></div>
+      <div class="conditions">
+        <div id="weather" class="kpis compact"></div>
+        <div>
+          <h4>Satellite thermal detections</h4>
+          <div id="firms" class="small"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="controls" id="controls">
       <div class="control">
         <span class="control-label">Time range</span>
@@ -213,51 +224,42 @@
       <p class="note" id="tilt-note"></p>
     </div>
 
-    <div class="grid-2">
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <h3>Seismic tremor</h3>
-            <div class="muted small">RSAM · 1–5 Hz · hourly median of 10-min mean |v| · µm/s · thick = stitched</div>
-          </div>
-          <div class="legend" id="tremor-legend"></div>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Seismic tremor</h3>
+          <div class="muted small">RSAM · 1–5 Hz · hourly median of 10-min mean |v| · µm/s · thick = stitched</div>
         </div>
-        <div id="chart-tremor" class="chart"></div>
-        <div class="sources-table" id="tremor-sources"></div>
+        <div class="legend" id="tremor-legend"></div>
       </div>
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <h3>Earthquakes</h3>
-            <div class="muted small" id="eq-bin-note">events per day, by region</div>
-          </div>
-          <div class="legend">
-            <span><i class="swatch s1"></i>Summit</span><span><i class="swatch s2"></i>Upper East Rift</span>
-            <span><i class="swatch s3"></i>Southwest Rift</span><span><i class="swatch s4"></i>Other</span>
-          </div>
-        </div>
-        <div id="chart-eq" class="chart"></div>
-        <p class="note" id="eq-summary"></p>
-      </div>
+      <div id="chart-tremor" class="chart"></div>
+      <div class="sources-table" id="tremor-sources"></div>
     </div>
 
-    <div class="grid-2">
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <h3>Inflation since the last episode</h3>
-            <div class="muted small">vs. tilt regained at past onsets</div>
-          </div>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Earthquakes</h3>
+          <div class="muted small" id="eq-bin-note">events per day, by region</div>
         </div>
-        <div id="chart-infl" class="chart"></div>
-        <p class="note" id="infl-note"></p>
+        <div class="legend">
+          <span><i class="swatch s1"></i>Summit</span><span><i class="swatch s2"></i>Upper East Rift</span>
+          <span><i class="swatch s3"></i>Southwest Rift</span><span><i class="swatch s4"></i>Other</span>
+        </div>
       </div>
-      <div class="panel">
-        <div class="panel-head"><div><h3>Summit conditions</h3><div class="muted small">Open-Meteo · NASA FIRMS</div></div></div>
-        <div id="weather" class="kpis compact"></div>
-        <div class="panel-sub"><h4>Satellite thermal detections</h4></div>
-        <div id="firms" class="small"></div>
+      <div id="chart-eq" class="chart"></div>
+      <p class="note" id="eq-summary"></p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Inflation since the last episode</h3>
+          <div class="muted small">vs. tilt regained at past onsets</div>
+        </div>
       </div>
+      <div id="chart-infl" class="chart"></div>
+      <p class="note" id="infl-note"></p>
     </div>
   </section>
 

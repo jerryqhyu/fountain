@@ -330,8 +330,7 @@ function renderTilt(d) {
 }
 
 function renderTremor(d) {
-  Plotly.react("chart-tremor", sourceTraces(d, TREMOR_COLORS, "µm/s", 3), baseLayout({ yaxis: { type: "log", title: { text: "µm/s (log)", font: { size: 11 } },
-    tickvals: [0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20], ticktext: ["0.02", "0.05", "0.1", "0.2", "0.5", "1", "2", "5", "10", "20"] } }), config);
+  Plotly.react("chart-tremor", sourceTraces(d, TREMOR_COLORS, "µm/s", 3), baseLayout({ yaxis: { type: "log", title: { text: "µm/s (log)", font: { size: 11 } }, exponentformat: "none", nticks: 6 } }), config);
   $("tremor-legend").innerHTML = legendHtml(d, TREMOR_COLORS);
   $("tremor-sources").innerHTML = sourcesTable(d, TREMOR_COLORS, "tremor");
 }
