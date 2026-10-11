@@ -23,8 +23,9 @@ DISABLE_SCHEDULER = os.getenv("DISABLE_SCHEDULER", "0") == "1"
 
 HST = ZoneInfo("Pacific/Honolulu")
 
-# The analysis grid: every series is stitched onto 5-minute UTC slots from GRID_START.
-GRID_S = 300
+# The analysis grid: every series is stitched onto hourly UTC slots from GRID_START.
+# A slot holds the hour that ends at it, so a row never contains data from after its timestamp.
+GRID_S = 3600
 GRID_START = 1733011200  # 2024-12-01 UTC: three weeks of pre-eruption context before episode 1
 
 # Kīlauea identifiers (verified against the Volcano API: vnum 332010, volcanoCd hi3).

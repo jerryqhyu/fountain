@@ -2,7 +2,7 @@
 
 Every external input is a *source* with one fetch function and (for time series) one table.
 Time-series sources are grouped by data type; within a type, the list order is the stitch
-priority: each 5-minute grid slot takes its value from the first source that has one.
+priority: each hourly grid slot takes its value from the first source that has one.
 """
 from __future__ import annotations
 

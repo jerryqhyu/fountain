@@ -1,65 +1,105 @@
-"""Train both models on the feature frame and run them over the grid.
+"""Walk-forward training of the hazard model, and its predictions on the grid.
 
-Predictions are frames with the same layout for both models: pred_<model>(t, p12, p24, p72),
-one row per 5-minute slot. A slot is NULL when an episode is under way or when any input the
-model requires is genuinely missing (no imputation).
+The model is refitted once per calendar month (Hawaii time). The fit for a month uses only
+frame rows whose outcome was known before that month began, and predicts only that month, so
+every stored probability is out-of-sample. The first fit covers December 2024 – June 2025;
+there are no predictions before July 2025.
+
+pred_hazard(t, p12) has one row per hourly slot from July 2025. p12 is NULL when an episode is
+under way or when any input the model requires is genuinely missing (no imputation).
 """
 from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
-from sklearn.model_selection import GroupKFold
 
 from .. import db, frame
-from ..config import DATA_DIR
+from ..config import DATA_DIR, HST
 from ..frame import FEATURES, LABELS
 from ..sources.base import tracked
 from .hazard import GROUPS, HazardModel
-from .ml import MLModel
 
 log = logging.getLogger("model")
-HORIZONS = (12, 24, 72)
+HORIZON_H = 12
 MODEL_DIR = DATA_DIR / "models"
 MODEL_DIR.mkdir(exist_ok=True)
+MODEL_PATH = MODEL_DIR / "walkforward.joblib"
 FIRST_TRAIN_EPISODE = 4  # episodes 1–3 were long/continuous, a different style
-REQUIRED = {"hazard": list(GROUPS), "ml": list(FEATURES)}
-PRED_TABLE = {"hazard": "pred_hazard", "ml": "pred_ml"}
+FIRST_PREDICTED_MONTH = (2025, 7)  # warm-up: the first fit sees December 2024 – June 2025
+REQUIRED = list(GROUPS)
 
 
 # ------------------------------------------------------------------ training
+def month_starts(now: int) -> list[int]:
+    """Start (HST) of every calendar month from the first predicted one up to the current one."""
+    out, (y, m) = [], FIRST_PREDICTED_MONTH
+    while (t := int(datetime(y, m, 1, tzinfo=HST).timestamp())) <= now:
+        out.append(t)
+        y, m = y + m // 12, m % 12 + 1
+    return out
+
+
 def labels(df: pd.DataFrame, horizon_h: float, now: int) -> np.ndarray:
-    """1 if the next onset is within (t, t+H]; 0 if not; NaN if not yet knowable."""
+    """1 if the next onset is within (t, t+H]; 0 if not; NaN if not yet knowable at `now`."""
     h = horizon_h * 3600
     t = df.index.to_numpy(float)
     nxt = df["next_onset"].to_numpy(float)
-    y = np.full(len(df), np.nan)
-    known = ~np.isnan(nxt)
-    y[known] = ((nxt[known] - t[known]) <= h).astype(float)
-    y[~known & (t + h <= now)] = 0.0
+    y = np.where(nxt - t <= h, 1.0, 0.0)  # NaN next_onset compares False
+    y[t + h > now] = np.nan
+    y[(nxt <= now) & (nxt - t <= h)] = 1.0  # an onset that has already happened is known early
     return y
 
 
-def training_frame(now: int) -> tuple[pd.DataFrame, dict]:
-    df = frame.load()
-    ep4 = db.query_one("SELECT end_t FROM episodes WHERE num=?", (FIRST_TRAIN_EPISODE,))["end_t"]
-    df = df[(df.index % 3600 == 0) & (df.index > ep4) & (df.index < now - 3600)]
-    df = df[(df["in_episode"] == 0) & df[FEATURES].notna().all(axis=1)].copy()
-    df["cycle"] = df["last_label"].astype(str)
-    return df, {H: labels(df, H, now) for H in (1,) + HORIZONS}
+def valid_mask(df: pd.DataFrame) -> np.ndarray:
+    return ((df["in_episode"] == 0) & df[REQUIRED].notna().all(axis=1)).to_numpy()
 
 
-def _metrics(y: np.ndarray, p: np.ndarray, base_rate: float) -> dict:
+def fit_month(df: pd.DataFrame, cutoff: int) -> HazardModel | None:
+    """Model for the month starting at `cutoff`, from the pause-hours whose outcome was known by then."""
+    ep4 = db.query_one("SELECT end_t FROM episodes WHERE num=?", (FIRST_TRAIN_EPISODE,))
+    y1 = labels(df, 1, cutoff)
+    rows = valid_mask(df) & ~np.isnan(y1) & (df.index.to_numpy() > ((ep4 or {}).get("end_t") or 0))
+    if y1[rows].sum() < 2:
+        return None
+    hz = HazardModel().fit(df[rows], y1[rows])
+    onsets = df[rows][y1[rows] == 1]
+    hz.fit_info_ = {
+        "cutoff": int(cutoff), "n_rows": int(rows.sum()), "n_onsets": int(y1[rows].sum()),
+        "cycles": int(df[rows]["last_label"].nunique()), "train_start": int(df.index[rows].min()),
+        "feature_ranges_at_onset": {f: [float(onsets[f].min()), float(onsets[f].max())]
+                                    for f in FEATURES if onsets[f].notna().any()},
+    }
+    return hz
+
+
+def predict(fits: list[HazardModel], df: pd.DataFrame) -> np.ndarray:
+    """P(onset within 12 h) per row, each month from the model fitted before it began."""
+    p = np.full(len(df), np.nan)
+    t = df.index.to_numpy()
+    ok = valid_mask(df)
+    for i, hz in enumerate(fits):
+        # the newest model also covers later rows until its successor is fitted
+        end = fits[i + 1].fit_info_["cutoff"] if i + 1 < len(fits) else 2**62
+        sel = np.where(ok & (t >= hz.fit_info_["cutoff"]) & (t < end))[0]
+        if len(sel):
+            p[sel] = hz.predict(df.iloc[sel], (HORIZON_H,))[HORIZON_H]
+    return p
+
+
+def _metrics(y: np.ndarray, p: np.ndarray) -> dict:
     ok = ~np.isnan(y) & ~np.isnan(p)
     y, p = y[ok].astype(int), np.clip(p[ok], 1e-4, 1 - 1e-4)
     if not len(y):
         return {}
-    b, bc = brier_score_loss(y, p), brier_score_loss(y, np.full(len(y), base_rate))
-    out = {"n": int(len(y)), "positives": int(y.sum()), "brier": round(float(b), 4),
+    base = float(y.mean())
+    b, bc = brier_score_loss(y, p), brier_score_loss(y, np.full(len(y), base))
+    out = {"n": int(len(y)), "positives": int(y.sum()), "base_rate": round(base, 4), "brier": round(float(b), 4),
            "brier_climatology": round(float(bc), 4),
            "brier_skill": round(float(1 - b / bc), 3) if bc > 0 else None,
            "log_loss": round(float(log_loss(y, p, labels=[0, 1])), 4)}
@@ -68,55 +108,46 @@ def _metrics(y: np.ndarray, p: np.ndarray, base_rate: float) -> dict:
     return out
 
 
-def evaluate(df: pd.DataFrame, ys: dict, n_splits: int = 8) -> dict:
-    """Out-of-fold skill, grouped by eruption cycle; reported for completed cycles and all."""
-    groups = df["cycle"].to_numpy()
-    oof = {m: {H: np.full(len(df), np.nan) for H in HORIZONS} for m in PRED_TABLE}
-    for tr, te in GroupKFold(n_splits=n_splits).split(df, groups=groups):
-        dtr, dte = df.iloc[tr], df.iloc[te]
-        ok = ~np.isnan(ys[1][tr])
-        hz = HazardModel().fit(dtr[ok], ys[1][tr][ok])
-        for H, p in hz.predict(dte, HORIZONS).items():
-            oof["hazard"][H][te] = p
-        mlm = MLModel(HORIZONS).fit(dtr, {H: ys[H][tr] for H in HORIZONS}, groups[tr])
-        for H, p in mlm.predict(dte).items():
-            oof["ml"][H][te] = p
-    open_cycle = df["cycle"].iloc[-1]
-    closed = (df["cycle"] != open_cycle).to_numpy() if np.isnan(df["next_onset"].iloc[-1]) else np.ones(len(df), bool)
-    res = {}
-    for m in oof:
-        res[m] = {"all": {}, "closed": {}}
-        for H in HORIZONS:
-            y = ys[H]
-            res[m]["all"][str(H)] = _metrics(y, oof[m][H], float(np.nanmean(y)))
-            yc = np.where(closed, y, np.nan)
-            res[m]["closed"][str(H)] = _metrics(yc, oof[m][H], float(np.nanmean(yc)))
-    return res
+def evaluate(df: pd.DataFrame, p: np.ndarray, now: int) -> dict:
+    """Skill of the stored (out-of-sample) predictions, for completed cycles and for all rows."""
+    y = labels(df, HORIZON_H, now)
+    open_pause = np.isnan(df["next_onset"].to_numpy(float))
+    return {"all": _metrics(y, p), "closed": _metrics(np.where(open_pause, np.nan, y), p)}
+
+
+def _write(df: pd.DataFrame, p: np.ndarray) -> None:
+    db.upsert("pred_hazard", ["t", "p12"],
+              [(int(t), None if np.isnan(v) else float(v)) for t, v in zip(df.index, p)])
 
 
 @tracked("train")
 def train() -> str:
+    """Refit every month's model and recompute all predictions."""
     t_start = time.time()
     now = int(t_start)
-    df, ys = training_frame(now)
-    ok = ~np.isnan(ys[1])
-    hz = HazardModel().fit(df[ok], ys[1][ok])
-    mlm = MLModel(HORIZONS).fit(df, {H: ys[H] for H in HORIZONS}, df["cycle"].to_numpy())
-    onset_rows = df[ys[1] == 1]
+    df = frame.load()
+    df[FEATURES] = df[FEATURES].astype(float)
+    fits = [hz for c in month_starts(now) if (hz := fit_month(df, c)) is not None]
+    if not fits:
+        raise RuntimeError("not enough history to fit the first month's model yet")
+    out = df[df.index >= fits[0].fit_info_["cutoff"]]
+    p = predict(fits, out)
+    last = fits[-1].fit_info_
     meta = {
-        "trained_at": now,
-        "n_rows": int(len(df)), "n_onsets": int(np.nansum(ys[1])), "cycles": int(df["cycle"].nunique()),
-        "train_start": int(df.index.min()),
-        "metrics": evaluate(df, ys),
-        "feature_ranges_at_onset": {f: [float(onset_rows[f].min()), float(onset_rows[f].max())]
-                                    for f in FEATURES if onset_rows[f].notna().any()},
-        "versions": {"hazard": hz.version, "ml": mlm.version},
-        "required": REQUIRED,
+        "trained_at": now, "version": HazardModel.version, "horizon_h": HORIZON_H, "required": REQUIRED,
+        **{k: last[k] for k in ("n_rows", "n_onsets", "cycles", "train_start", "feature_ranges_at_onset")},
+        "fit_through": last["cutoff"], "first_prediction": fits[0].fit_info_["cutoff"],
+        "refits": [hz.fit_info_["cutoff"] for hz in fits],
+        "metrics": evaluate(out, p, now),
         "train_seconds": round(time.time() - t_start, 1),
     }
-    joblib.dump({"hazard": hz, "ml": mlm, "meta": meta}, MODEL_DIR / "current.joblib")
+    joblib.dump({"fits": fits, "meta": meta}, MODEL_PATH)
+    with db.tx() as c:
+        c.execute("DELETE FROM pred_hazard")
+    _write(out, p)
     db.kv_set("model_meta", meta)
-    return f"{meta['n_rows']} hourly rows, {meta['n_onsets']} onsets, {meta['train_seconds']} s"
+    return (f"{len(fits)} monthly fits; latest on {last['n_rows']} hourly rows, {last['n_onsets']} onsets "
+            f"through {last['cutoff']}; {meta['train_seconds']} s")
 
 
 _cache: dict | None = None
@@ -125,54 +156,43 @@ _cache: dict | None = None
 def models() -> dict | None:
     """Current model bundle, reloaded if another process retrained it."""
     global _cache
-    p = MODEL_DIR / "current.joblib"
-    if not p.exists():
+    if not MODEL_PATH.exists():
         return None
-    mtime = p.stat().st_mtime
+    mtime = MODEL_PATH.stat().st_mtime
     if _cache is None or _cache.get("_mtime") != mtime:
-        _cache = joblib.load(p)
+        _cache = joblib.load(MODEL_PATH)
         _cache["_mtime"] = mtime
     return _cache
 
 
+def stale(now: int | None = None) -> bool:
+    """True when there is no model yet, or a new month has begun since the last fit."""
+    m = models()
+    months = month_starts(int(now or time.time()))
+    return m is None or (bool(months) and months[-1] > m["meta"]["fit_through"])
+
+
 # ------------------------------------------------------------------ inference
-def valid_mask(df: pd.DataFrame, model: str) -> np.ndarray:
-    return ((df["in_episode"] == 0) & df[REQUIRED[model]].notna().all(axis=1)).to_numpy()
-
-
 @tracked("infer")
 def infer(t0: int | None = None) -> str:
     m = models()
     if m is None:
         raise RuntimeError("no trained model yet")
-    df = frame.load(t0)
+    df = frame.load(max(t0 or 0, m["meta"]["first_prediction"]))
     if df.empty:
         return "no frame rows"
     df[FEATURES] = df[FEATURES].astype(float)
-    out = []
-    for name in PRED_TABLE:
-        ok = valid_mask(df, name)
-        p = {H: np.full(len(df), np.nan) for H in HORIZONS}
-        idx = np.where(ok)[0]
-        for c in range(0, len(idx), 5000):  # hazard projects 72 h per row: chunk to bound memory
-            sel = idx[c:c + 5000]
-            res = m[name].predict(df.iloc[sel], HORIZONS) if name == "hazard" else m[name].predict(df.iloc[sel])
-            for H in HORIZONS:
-                p[H][sel] = res[H]
-        rows = [(int(t), *[None if np.isnan(p[H][i]) else float(p[H][i]) for H in HORIZONS])
-                for i, t in enumerate(df.index)]
-        db.upsert(PRED_TABLE[name], ["t", "p12", "p24", "p72"], rows)
-        out.append(f"{name}: {int(ok.sum())}/{len(df)} slots valid")
-    return "; ".join(out)
+    p = predict(m["fits"], df)
+    _write(df, p)
+    return f"{int((~np.isnan(p)).sum())}/{len(df)} slots valid"
 
 
-def predictions(model: str, t0: int, t1: int | None = None) -> pd.DataFrame:
-    rows = db.query(f"SELECT t, p12, p24, p72 FROM {PRED_TABLE[model]} WHERE t>=? AND t<=? ORDER BY t",
-                    (t0, t1 or 2**62))
-    return pd.DataFrame(rows, columns=["t", "p12", "p24", "p72"])
+def predictions(t0: int, t1: int | None = None) -> pd.DataFrame:
+    rows = db.query("SELECT t, p12 FROM pred_hazard WHERE t>=? AND t<=? ORDER BY t", (t0, t1 or 2**62))
+    return pd.DataFrame(rows, columns=["t", "p12"])
 
 
-# ------------------------------------------------------------------ latest, for the cards
+# ------------------------------------------------------------------ latest, for the card
 def _episode_in_progress(row: pd.Series) -> tuple[bool, str | None]:
     open_ev = db.query_one("SELECT label FROM episodes WHERE end_t IS NULL ORDER BY start_t DESC LIMIT 1")
     if open_ev:
@@ -195,11 +215,11 @@ def _warnings(row: pd.Series, meta: dict) -> list[str]:
             notes.append(
                 f"Tilt has recovered {rr:.2f}× the last episode's deflation, more than at {frac:.0%} of past onsets "
                 f"(typical 0.9–1.15×{'; only episode ' + ', '.join(above) + ' was higher' if above else ''}). "
-                "The usual tilt threshold hasn't produced an onset this time, so both models are extrapolating.")
+                "The usual tilt threshold hasn't produced an onset this time, so the model is extrapolating.")
     rng = meta.get("feature_ranges_at_onset", {})
     hs = row.get("hours_since_end")
     if pd.notna(hs) and "hours_since_end" in rng and hs > rng["hours_since_end"][1]:
-        notes.append(f"This pause ({hs / 24:.1f} d) is longer than any previous pause "
+        notes.append(f"This pause ({hs / 24:.1f} d) is longer than any pause the model was fitted on "
                      f"(max {rng['hours_since_end'][1] / 24:.1f} d).")
     if pd.notna(row.get("last_end")):
         for e in db.query("SELECT label, notes FROM episodes WHERE kind='non_fountaining' AND start_t > ?",
@@ -210,45 +230,42 @@ def _warnings(row: pd.Series, meta: dict) -> list[str]:
 
 def latest() -> dict:
     m = models()
-    meta = (m or {}).get("meta") or db.kv_get("model_meta", {}) or {}
+    meta = (m or {}).get("meta") or {}
     fr = frame.load(int(time.time()) - 2 * 86400)
     if m is None or fr.empty:
-        return {"models": {}, "training": meta}
+        return {"model": None, "training": meta}
     fr[FEATURES] = fr[FEATURES].astype(float)
     newest = fr.iloc[-1]
-    out = {}
-    for name in PRED_TABLE:
-        pr = predictions(name, int(fr.index[0])).dropna()
-        missing = [f for f in REQUIRED[name] if pd.isna(newest[f])]
-        if pr.empty:
-            out[name] = {"version": meta["versions"][name], "p": None, "missing_now": missing}
-            continue
+    missing = [f for f in REQUIRED if pd.isna(newest[f])]
+    pr = predictions(int(fr.index[0])).dropna()
+    pr = pr[pr["t"].isin(fr.index)]
+    if pr.empty:
+        out = {"version": meta["version"], "p12": None, "missing_now": missing}
+    else:
         last = pr.iloc[-1]
         t = int(last["t"])
         row = fr.loc[[t]]
-        if name == "hazard":
-            contrib, unit = m["hazard"].contributions(row), "log-odds of hourly hazard"
-        else:
-            contrib, unit = m["ml"].contributions(row, 24), "Δ P(24 h)"
+        contrib = m["fits"][-1].contributions(row)
         feats = {f: (None if pd.isna(row.iloc[0][f]) else float(row.iloc[0][f])) for f in FEATURES}
         top = sorted(contrib.items(), key=lambda kv: -abs(kv[1]))[:5]
         trend = {}
         for hrs in (6, 24):
             prev = pr[pr["t"] <= t - hrs * 3600]
             if len(prev):
-                trend[f"delta_{hrs}h"] = round(float(last["p24"] - prev.iloc[-1]["p24"]), 4)
+                trend[f"delta_{hrs}h"] = round(float(last["p12"] - prev.iloc[-1]["p12"]), 4)
         d6 = trend.get("delta_6h", 0.0)
         trend["arrow"] = "up" if d6 > 0.02 else ("down" if d6 < -0.02 else "flat")
         in_ep, why = _episode_in_progress(row.iloc[0])
-        out[name] = {
-            "version": meta["versions"][name], "t": t, "p": {str(H): float(last[f"p{H}"]) for H in HORIZONS},
+        out = {
+            "version": meta["version"], "t": t, "p12": float(last["p12"]),
             "trend": trend, "features": feats, "last_episode": row.iloc[0]["last_label"],
-            "top_factors": [{"feature": k, "label": LABELS.get(k, k), "value": feats.get(k), "effect": round(v, 4),
-                             "unit": unit} for k, v in top if abs(v) > 1e-6],
+            "top_factors": [{"feature": k, "label": LABELS.get(k, k), "value": feats.get(k), "effect": round(v, 4)}
+                            for k, v in top if abs(v) > 1e-6],
             "warnings": _warnings(row.iloc[0], meta), "in_episode": in_ep, "in_episode_reason": why,
             # the newest grid slot may be NULL if an input hasn't arrived yet
             "newest_slot": int(fr.index[-1]), "missing_now": missing,
         }
-    return {"primary": "hazard", "models": out,
-            "training": {k: meta.get(k) for k in ("trained_at", "n_rows", "n_onsets", "cycles", "train_start",
-                                                  "metrics", "versions", "required")}}
+    return {"model": out,
+            "training": {k: meta.get(k) for k in ("trained_at", "version", "horizon_h", "n_rows", "n_onsets", "cycles",
+                                                  "train_start", "fit_through", "first_prediction", "refits",
+                                                  "metrics", "required")}}

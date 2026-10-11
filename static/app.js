@@ -1,7 +1,8 @@
 "use strict";
 
 const HST = "Pacific/Honolulu";
-const state = { days: 7, horizon: "24", showEpisodes: false, episodes: [], data: {} };
+// custom = { t0, t1 } (unix s) while the date pickers define the window; otherwise the last `days`
+const state = { days: 7, custom: null, episodes: [], data: {} };
 
 // ---------- helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -36,6 +37,8 @@ const dur = (h) => (h == null ? "—" : h < 48 ? `${h.toFixed(1)} h` : `${(h / 2
 const pct = (p) => (p == null ? "—" : p < 0.01 ? "<1%" : p > 0.99 ? ">99%" : `${Math.round(p * 100)}%`);
 const num = (x, d = 1) => (x == null || Number.isNaN(x) ? "—" : Number(x).toFixed(d));
 const hst = (t) => new Date((t - 36000) * 1000).toISOString().slice(0, 19).replace("T", " ");
+const hstDate = (t) => hst(t).slice(0, 10);
+const hstMidnight = (ymd) => Date.parse(`${ymd}T00:00:00Z`) / 1000 + 36000;
 
 /** Break the line where samples are further apart than maxGap (or 3× typical spacing if thinned). */
 function withGaps(ts, ys, maxGap) {
@@ -54,12 +57,19 @@ function withGaps(ts, ys, maxGap) {
 }
 
 const SERIES_START_FALLBACK = 1734949200;
-function spanDays() {
-  if (state.days !== "all") return state.days;
+function windowRange() {
+  const now = Date.now() / 1000;
+  if (state.custom) return [state.custom.t0, Math.min(state.custom.t1, now)];
+  if (state.days !== "all") return [now - state.days * 86400, now];
   const start = state.episodes.length ? Math.min(...state.episodes.map((e) => e.start_t)) : SERIES_START_FALLBACK;
-  return (Date.now() / 1000 - start) / 86400 + 1;
+  return [start - 86400, now];
 }
-function windowRange() { const now = Date.now() / 1000; return [now - spanDays() * 86400, now]; }
+function spanDays() { const [t0, t1] = windowRange(); return (t1 - t0) / 86400; }
+/** Query string selecting the window: explicit bounds for a custom range, else "the last N". */
+function rangeQuery(unit = "hours") {
+  if (state.custom) { const [t0, t1] = windowRange(); return `start=${Math.floor(t0)}&end=${Math.ceil(t1)}`; }
+  return unit === "days" ? `days=${Math.ceil(spanDays())}` : `hours=${Math.ceil(spanDays() * 24)}`;
+}
 
 // ---------- chart chrome ----------
 function axisStyle() {
@@ -80,7 +90,7 @@ function baseLayout(extra = {}) {
   lay.yaxis = { ...ax, ...(extra.yaxis || {}) };
   lay.shapes = [...(extra.shapes || [])];
   lay.annotations = [...(extra.annotations || [])];
-  if (state.showEpisodes) addEpisodeOverlay(lay);
+  addEpisodeOverlay(lay);
   return lay;
 }
 const config = { displayModeBar: false, responsive: true };
@@ -88,7 +98,7 @@ const config = { displayModeBar: false, responsive: true };
 function addEpisodeOverlay(lay) {
   const [t0, t1] = windowRange();
   const eps = state.episodes.filter((e) => (e.end_t || t1) >= t0 && e.start_t <= t1);
-  const minW = (t1 - t0) * (state.days === "all" ? 0.0015 : 0.004);
+  const minW = (t1 - t0) * (spanDays() > 365 ? 0.0015 : 0.004);
   for (const e of eps) {
     lay.shapes.push({ type: "rect", xref: "x", yref: "paper", x0: hst(e.start_t), x1: hst(Math.max(e.end_t || t1, e.start_t + minW)),
       y0: 0, y1: 1, fillcolor: css(e.kind === "fountaining" ? "--episode" : "--episode-alt"), line: { width: 0 }, layer: "below" });
@@ -131,17 +141,12 @@ function renderNotices(d) {
 
 const humanTimes = (s) => String(s ?? "").replace(/\b1[6-9]\d{8}\b/g, (t) => fmtHST(Number(t)));
 function renderMessages(d) {
-  const msgs = d?.messages || [];
-  if (!msgs.length) { $("messages").innerHTML = `<li class="muted small">No messages fetched yet.</li>`; return; }
-  const latestNotice = state.data.latestNoticeT || 0;
-  $("messages").innerHTML = msgs.map((m) => {
-    const isNew = m.t > latestNotice;  // posted after the latest Daily Update / notice
-    const when = new Date(m.t * 1000).toLocaleString("en-US", { timeZone: HST, month: "short", day: "numeric" });
-    const time = new Date(m.t * 1000).toLocaleString("en-US", { timeZone: HST, hour: "numeric", minute: "2-digit" });
-    const kind = m.kind === "Kilauea Message" ? "Kīlauea message" : "HVO message";
-    return `<li class="${isNew ? "new" : ""}"><div class="when"><b>${esc(time)} HST</b>${esc(when)} · ${esc(rel(m.t))}<br><span class="kind">${esc(kind)}</span></div>
-      <div class="text">${esc(m.text)}${m.truncated ? ` <a href="${esc(d.url)}" target="_blank" rel="noopener">read more ↗</a>` : ""}</div></li>`;
-  }).join("");
+  const m = d?.messages?.[0];
+  if (!m) { $("message-title").textContent = "No messages fetched yet"; return; }
+  const isNew = m.t > (state.data.latestNoticeT || 0);  // posted after the latest Daily Update / notice
+  $("message-title").textContent = m.kind === "Kilauea Message" ? "Kīlauea Message" : "HVO Message";
+  $("message-time").innerHTML = `${esc(fmtHST(m.t, true))} · ${esc(rel(m.t))}` + (isNew ? ` · <span class="new">newer than the notice</span>` : "");
+  $("message-text").innerHTML = esc(m.text) + (m.truncated ? ` <a href="${esc(d.url)}" target="_blank" rel="noopener">read more ↗</a>` : "");
 }
 
 function healthClass(h) { return h.error ? "err" : !h.last_success ? "never" : h.stale ? "stale" : ""; }
@@ -160,27 +165,25 @@ function fmtFeature(f, v) {
   switch (f) {
     case "hours_since_end": return dur(v);
     case "recovery_ratio": return `${v.toFixed(2)}×`;
-    case "inflation_urad": case "gap_to_onset_urad": case "last_deflation_urad": return `${v.toFixed(2)} µrad`;
-    case "tilt_rate_6h": case "tilt_rate_24h": return `${v >= 0 ? "+" : ""}${v.toFixed(3)} µrad/h`;
-    case "rsam_log": return `${Math.pow(10, v).toFixed(3)} µm/s`;
-    case "rsam_ratio_log": case "rsam_trend_log": return `${Math.pow(10, v).toFixed(2)}×`;
+    case "tilt_rate_24h": return `${v >= 0 ? "+" : ""}${v.toFixed(3)} µrad/h`;
+    case "rsam_ratio_log": return `${Math.pow(10, v).toFixed(2)}×`;
     case "precursor": return v > 0 ? `yes · weight ${v.toFixed(2)}` : "no";
-    case "eq_summit_ew": case "eq_all_ew": return v.toFixed(1);
+    case "eq_summit_ew": return v.toFixed(1);
     default: return String(Math.round(v * 100) / 100);
   }
 }
 
-function renderModelCard(cardId, m, effectFmt) {
-  const card = $(cardId);
+function renderModelCard(m) {
+  const card = $("card-hazard");
   const tiles = card.querySelector("[data-tiles]");
-  if (!m || !m.p) {
+  if (!m || m.p12 == null) {
     tiles.innerHTML = `<div class="tile muted">No valid prediction yet${m?.missing_now?.length ? ": missing " + esc(m.missing_now.join(", ")) : ""}</div>`;
     card.querySelector("[data-trend]").textContent = "";
     card.querySelector("[data-lag]").textContent = "";
     card.querySelector("[data-factors]").innerHTML = "";
     return;
   }
-  tiles.innerHTML = ["12", "24", "72"].map((H) => `<div class="tile"><div class="h">next ${H} h</div><div class="v">${pct(m.p[H])}</div></div>`).join("");
+  tiles.innerHTML = `<div class="tile"><div class="h">next 12 h</div><div class="v">${pct(m.p12)}</div></div>`;
   const tr = m.trend || {};
   const arrow = { up: "▲ rising", down: "▼ falling", flat: "▬ steady" }[tr.arrow || "flat"];
   const d24 = tr.delta_24h != null ? ` · ${tr.delta_24h >= 0 ? "+" : ""}${Math.round(tr.delta_24h * 100)} pts / 24 h` : "";
@@ -189,14 +192,13 @@ function renderModelCard(cardId, m, effectFmt) {
     ? ` · newer slots wait for ${m.missing_now.join(", ")} (input latency)` : "");
   card.querySelector("[data-factors]").innerHTML = (m.top_factors || []).map((f) => `
     <li><span>${esc(f.label)} <span class="val">· ${esc(fmtFeature(f.feature, f.value))}</span></span>
-    <span class="eff ${f.effect > 0 ? "up" : "down"}">${f.effect > 0 ? "raises" : "lowers"} ${effectFmt(Math.abs(f.effect))}</span></li>`).join("");
+    <span class="eff ${f.effect > 0 ? "up" : "down"}">${f.effect > 0 ? "raises" : "lowers"} ${Math.abs(f.effect).toFixed(2)}</span></li>`).join("");
 }
 
 function renderProbability(d) {
-  const hz = d.models.hazard, ml = d.models.ml;
+  const hz = d.model;
   $("disclaimer").textContent = d.disclaimer;
-  renderModelCard("card-hazard", hz, (x) => x.toFixed(2));
-  renderModelCard("card-ml", ml, (x) => `${Math.round(x * 100)} pts`);
+  renderModelCard(hz);
   $("episode-banner").classList.toggle("hidden", !hz?.in_episode);
   if (hz?.in_episode) $("episode-banner").innerHTML = `<b>An episode appears to be in progress.</b> ${esc(hz.in_episode_reason || "")}. Onset probabilities don't apply while an episode is under way.`;
   const warns = hz?.warnings || [];
@@ -204,44 +206,41 @@ function renderProbability(d) {
   $("prob-warnings").innerHTML = `<div class="eyebrow">Read with caution: conditions are outside the training data</div><ul>` +
     warns.map((w) => { const i = w.search(/[.:]\s/); return `<li><b>${esc(i > 0 ? w.slice(0, i + 1) : w)}</b> ${esc(i > 0 ? w.slice(i + 2) : "")}</li>`; }).join("") + "</ul>";
   const tr = d.training || {}, m = tr.metrics;
-  if (m && m.hazard?.closed) {
-    const head = `<thead><tr><th></th><th>12 h BSS</th><th>AUC</th><th>24 h BSS</th><th>AUC</th><th>72 h BSS</th><th>AUC</th></tr></thead>`;
-    const row = (k, scope) => `<tr><td>${esc(tr.versions?.[k] || k)}</td>` +
-      ["12", "24", "72"].map((H) => { const x = m[k]?.[scope]?.[H] || {}; return `<td>${num(x.brier_skill, 2)}</td><td>${num(x.auc, 2)}</td>`; }).join("") + "</tr>";
+  if (m?.closed) {
+    const row = (label, x = {}) => `<tr><td>${label}</td><td class="num">${num(x.brier_skill, 2)}</td><td class="num">${num(x.auc, 2)}</td>
+      <td class="num">${x.n ?? "—"}</td><td class="num">${x.positives ?? "—"}</td><td class="num">${x.base_rate != null ? (x.base_rate * 100).toFixed(1) + "%" : "—"}</td></tr>`;
     $("skill").innerHTML = `
-      <div class="eyebrow" style="margin-top:12px">Completed cycles</div>
-      <table class="skill">${head}<tbody>${row("hazard", "closed")}${row("ml", "closed")}</tbody></table>
-      <div class="eyebrow" style="margin-top:14px">Including the current, unusually long pause</div>
-      <table class="skill">${head}<tbody>${row("hazard", "all")}${row("ml", "all")}</tbody></table>
-      <p class="muted small" style="margin-top:10px">Brier skill score (BSS) &gt; 0 means better than predicting the base rate. Trained on
-      ${tr.n_rows} hourly frame rows with complete inputs (${tr.n_onsets} onsets, ${tr.cycles} cycles) since episode 4; trained ${rel(tr.trained_at)}.
-      Required inputs: hazard-1.0 ${esc((tr.required?.hazard || []).join(", "))}; ml-1.0 all 13 features.</p>`;
+      <table class="skill"><thead><tr><th>12 h probability, ${esc(tr.version)}</th><th class="num">BSS</th><th class="num">AUC</th>
+        <th class="num">Hours scored</th><th class="num">…with an onset within 12 h</th><th class="num">Base rate</th></tr></thead>
+        <tbody>${row("Completed cycles", m.closed)}${row("Including the current pause", m.all)}</tbody></table>
+      <p class="muted small" style="margin-top:10px">Every scored probability is out-of-sample. The model is refitted at the start of each month
+      (Hawaii time) on the data available by then, and that fit only predicts the month that follows. The first fit used December 2024 – June 2025,
+      so predictions start ${fmtHST(tr.first_prediction, true)}; ${tr.refits?.length ?? "—"} monthly fits so far. Brier skill score (BSS) &gt; 0 means
+      better than always predicting the base rate. Latest fit: data through ${fmtHST(tr.fit_through, true)}, ${tr.n_rows} hourly rows with complete
+      inputs (${tr.n_onsets} onsets, ${tr.cycles} cycles) since episode 4. Inputs: ${esc((tr.required || []).join(", "))}.</p>`;
   }
 }
 
 const BUILT_FROM = {
-  hours_since_end: "episode catalog", recovery_ratio: "stitched tilt + catalog", inflation_urad: "stitched tilt + catalog",
-  gap_to_onset_urad: "stitched tilt + catalog", last_deflation_urad: "stitched tilt + catalog",
-  tilt_rate_6h: "stitched tilt", tilt_rate_24h: "stitched tilt", rsam_log: "stitched tremor", rsam_ratio_log: "stitched tremor",
-  rsam_trend_log: "stitched tremor", eq_summit_ew: "ComCat", eq_all_ew: "ComCat", precursor: "HVO notices (keywords)",
+  hours_since_end: "episode catalog", recovery_ratio: "stitched tilt + catalog", tilt_rate_24h: "stitched tilt",
+  rsam_ratio_log: "stitched tremor", eq_summit_ew: "ComCat", precursor: "HVO notices (keywords)",
 };
 function renderInputs(fr) {
   if (!fr?.t?.length) return;
   const i = fr.t.length - 1;
-  const req = fr.required || {};
-  $("inputs-note").textContent = `Latest row of the 5-minute feature frame (${fmtHST(fr.t[i])}). A model outputs None when any input it requires is missing.`;
-  $("inputs").querySelector("tbody").innerHTML = Object.keys(BUILT_FROM).map((f) => {
+  $("inputs-note").textContent = `Latest row of the hourly feature frame (${fmtHST(fr.t[i])}), built from the hour that ended then. The model outputs None when any input is missing.`;
+  $("inputs").querySelector("tbody").innerHTML = (fr.required || []).map((f) => {
     const v = fr.columns[f]?.[i];
-    const cell = (m) => (req[m] || []).includes(f) ? `<td class="${v == null ? "miss" : "req"}">${v == null ? "missing" : "required"}</td>` : `<td class="muted">—</td>`;
-    return `<tr><td>${esc(fr.labels[f] || f)}</td><td class="num ${v == null ? "miss" : ""}">${esc(fmtFeature(f, v))}</td>${cell("hazard")}${cell("ml")}<td class="muted">${esc(BUILT_FROM[f])}</td></tr>`;
+    return `<tr><td>${esc(fr.labels[f] || f)}</td><td class="num ${v == null ? "miss" : ""}">${esc(fmtFeature(f, v))}</td>
+      <td class="${v == null ? "miss" : "req"}">${v == null ? "missing" : "present"}</td><td class="muted">${esc(BUILT_FROM[f] || "")}</td></tr>`;
   }).join("");
 }
 
 function renderKPIs(prob, tilt, eq24) {
-  const f = prob?.models?.hazard?.features || {};
+  const f = prob?.model?.features || {};
   const inf = tilt?.inflation || {};
   const items = [
-    ["Since last episode", dur(f.hours_since_end), prob?.models?.hazard ? `episode ${prob.models.hazard.last_episode} ended` : ""],
+    ["Since last episode", dur(f.hours_since_end), prob?.model?.last_episode ? `episode ${prob.model.last_episode} ended` : ""],
     ["Inflation since", `${num(f.inflation_urad)} µrad`, f.recovery_ratio != null ? `${num(f.recovery_ratio, 2)}× last deflation (${num(f.last_deflation_urad)} µrad)` : ""],
     ["Tilt vs last onset", `${f.gap_to_onset_urad >= 0 ? "+" : ""}${num(f.gap_to_onset_urad)} µrad`, `episode ${inf.episode || "?"} onset level`],
     ["Tilt rate, 24 h", num(f.tilt_rate_24h, 3), `µrad/h · 6 h: ${num(f.tilt_rate_6h, 3)}`],
@@ -254,19 +253,20 @@ function renderKPIs(prob, tilt, eq24) {
 
 // ---------- charts ----------
 function renderProbChart(p) {
-  const key = `p${state.horizon}`, traces = [], ann = [], shapes = [];
-  for (const [model, name, color] of [["hazard", "hazard-1.0", css("--s1")], ["ml", "ml-1.0", css("--s2")]]) {
-    const d = p?.models?.[model];
-    if (!d) continue;
-    const g = withGaps(d.t, d[key].map((v) => (v == null ? null : v * 100)), 1800);
-    traces.push({ x: g.x, y: g.y, mode: "lines", name, line: { color, width: 1.8 }, connectgaps: false, hovertemplate: `${name}: %{y:.1f}%<extra></extra>` });
-    const li = d[key].map((v, i) => (v == null ? -1 : i)).filter((i) => i >= 0).at(-1);
-    if (li != null) ann.push({ x: hst(d.t[li]), y: d[key][li] * 100, xanchor: "left", xshift: 6, showarrow: false, text: `${Math.round(d[key][li] * 100)}%`, font: { size: 11, color: css("--ink-2") } });
+  const traces = [], ann = [], shapes = [];
+  const [t0, t1] = windowRange();
+  if (p.t.length) {
+    const g = withGaps(p.t, p.p12.map((v) => (v == null ? null : v * 100)), 5400);
+    traces.push({ x: g.x, y: g.y, mode: "lines", name: p.version, line: { color: css("--s1"), width: 1.8 }, connectgaps: false, hovertemplate: "P(onset within 12 h): %{y:.1f}%<extra></extra>" });
+    const li = p.p12.findLastIndex((v) => v != null);
+    if (li >= 0) ann.push({ x: hst(p.t[li]), y: p.p12[li] * 100, xanchor: "left", xshift: 6, showarrow: false, text: `${Math.round(p.p12[li] * 100)}%`, font: { size: 11, color: css("--ink-2") } });
+  } else if (p.first_prediction && t1 <= p.first_prediction) {
+    ann.push({ xref: "paper", yref: "paper", x: 0.5, y: 0.5, showarrow: false, text: `No predictions before ${fmtHST(p.first_prediction, true)}: the first model needed December 2024 – June 2025 to fit`, font: { size: 12, color: css("--muted") } });
   }
-  const [t0] = windowRange();
-  if (p?.trained_at && p.trained_at > t0) shapes.push({ type: "line", xref: "x", yref: "paper", x0: hst(p.trained_at), x1: hst(p.trained_at), y0: 0, y1: 1, line: { color: css("--muted"), width: 1 }, opacity: 0.45, layer: "below" });
+  for (const c of p.refits || []) shapes.push({ type: "line", xref: "x", yref: "paper", x0: hst(c), x1: hst(c), y0: 0, y1: 1, line: { color: css("--muted"), width: 1, dash: "dot" }, opacity: 0.45, layer: "below" });
   Plotly.react("chart-prob", traces, baseLayout({ margin: { l: 44, r: 44, t: 14, b: 34 }, shapes, annotations: ann, yaxis: { ticksuffix: "%", rangemode: "tozero" } }), config);
-  $("prob-note").textContent = `P(onset within ${state.horizon} h) on the 5-minute grid. Gaps = None (episode under way or an input missing). Left of the faint line (training ${p?.trained_at ? fmtHST(p.trained_at) : "—"}) is in-sample.`;
+  $("prob-note").textContent = "P(onset within 12 h), one value per hour, all out-of-sample: each month comes from a model fitted only on data before that month began"
+    + ((p.refits || []).length ? " (dotted lines = monthly refits)" : "") + ". Gaps = None (episode under way or an input missing).";
 }
 
 const TILT_COLORS = { uwd_release: "--s1", uwd_plot2d: "--s2", uwd_plot3m: "--s3", sdh_release: "--s4" };
@@ -277,7 +277,7 @@ function sourceTraces(d, colors, unit, digits) {
   const traces = [];
   for (const s of d.sources) {
     if (!s.t.length) continue;
-    const g = withGaps(s.t, s.v, 1800);
+    const g = withGaps(s.t, s.v, 5400);
     traces.push({ x: g.x, y: g.y, mode: "lines", name: s.label, line: { color: css(colors[s.key]), width: 1 }, opacity: 0.35,
       connectgaps: false, hoverinfo: "skip" });
   }
@@ -286,7 +286,7 @@ function sourceTraces(d, colors, unit, digits) {
   const keys = [...new Set(st.src)].filter(Boolean);
   for (const k of keys) {
     const ys = st.v.map((v, i) => (st.src[i] === k || st.src[i + 1] === k ? v : null)); // overlap 1 point so segments join
-    const g = withGaps(st.t, ys, 1800);
+    const g = withGaps(st.t, ys, 5400);
     const label = d.sources.find((s) => s.key === k)?.label || k;
     traces.push({ x: g.x, y: g.y, mode: "lines", name: `stitched · ${label}`, line: { color: css(colors[k]), width: 2.2 },
       connectgaps: false, hovertemplate: `stitched (${label}): %{y:.${digits}f} ${unit}<extra></extra>` });
@@ -296,7 +296,7 @@ function sourceTraces(d, colors, unit, digits) {
 
 function legendHtml(d, colors) {
   return d.sources.filter((s) => s.t.length).map((s) => `<span><i class="swatch" style="background:${css(colors[s.key])}"></i>${esc(s.label)}</span>`).join("") +
-    `<span class="muted">thick = stitched (colour = supplying source), thin = raw source</span>`;
+    `<span class="muted">thick = stitched (colour = supplying source), thin = each source's hourly median</span>`;
 }
 
 function sourcesTable(d, colors, kind) {
@@ -316,17 +316,17 @@ function sourcesTable(d, colors, kind) {
       <td class="muted">${esc(s.note)}</td></tr>`;
   }).join("");
   return `<table><thead><tr><th>Source (priority order)</th><th class="num">Share of grid</th><th>Mapping</th><th>Fetched</th><th>Notes</th></tr></thead><tbody>${rows}
-    <tr><td class="muted">no source (genuine gap)</td><td class="num">${total ? ((100 * (d.missing_slots || 0)) / total).toFixed(2) + "%" : "—"}</td><td colspan="3" class="muted">models output None for slots that need this ${kind}</td></tr></tbody></table>`;
+    <tr><td class="muted">no source (genuine gap)</td><td class="num">${total ? ((100 * (d.missing_slots || 0)) / total).toFixed(2) + "%" : "—"}</td><td colspan="3" class="muted">the model outputs None for slots that need this ${kind}</td></tr></tbody></table>`;
 }
 
 function renderTilt(d) {
   Plotly.react("chart-tilt", sourceTraces(d, TILT_COLORS, "µrad", 2), baseLayout({ yaxis: { title: { text: "µrad", font: { size: 11 } } } }), config);
   $("tilt-legend").innerHTML = legendHtml(d, TILT_COLORS);
   $("tilt-sources").innerHTML = sourcesTable(d, TILT_COLORS, "tilt");
-  const r = withGaps(d.rate.t, d.rate.v, 1800);
+  const r = withGaps(d.rate.t, d.rate.v, 5400);
   Plotly.react("chart-rate", [{ x: r.x, y: r.y, mode: "lines", line: { color: css("--ink"), width: 1.3 }, connectgaps: false, hovertemplate: "%{y:.3f} µrad/h<extra></extra>" }],
     baseLayout({ margin: { l: 52, r: 18, t: 8, b: 30 }, shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 0, line: { color: css("--axis"), width: 1 } }] }), config);
-  $("tilt-note").textContent = "Share of grid counts every 5-minute slot since Dec 1, 2024. Plot sources are aligned by their median offset to the series built from higher-priority sources; SDH fills only gaps where its fit to UWD is tight.";
+  $("tilt-note").textContent = "Share of grid counts every hourly slot since Dec 1, 2024. Plot sources are aligned by their median offset to the series built from higher-priority sources; SDH fills only gaps where its fit to UWD is tight.";
 }
 
 function renderTremor(d) {
@@ -407,12 +407,16 @@ function renderEpisodes(d) {
 }
 
 // ---------- loading ----------
+let seriesLoad = 0;
 async function loadSeries() {
-  const hours = Math.ceil(spanDays() * 24);
+  const load = ++seriesLoad;
+  if (!state.custom) syncDates();
+  const q = rangeQuery();
   const [tilt, tremor, eq, preds] = await Promise.all([
-    safe(() => api(`/api/series/tilt?hours=${hours}`), "tilt"), safe(() => api(`/api/series/tremor?hours=${hours}`), "tremor"),
-    safe(() => api(`/api/earthquakes?days=${Math.ceil(spanDays())}`), "eq"), safe(() => api(`/api/predictions?hours=${hours}`), "preds"),
+    safe(() => api(`/api/series/tilt?${q}`), "tilt"), safe(() => api(`/api/series/tremor?${q}`), "tremor"),
+    safe(() => api(`/api/earthquakes?${rangeQuery("days")}`), "eq"), safe(() => api(`/api/predictions?${q}`), "preds"),
   ]);
+  if (load !== seriesLoad) return { tilt: state.data.tilt };  // the range changed while this was loading
   Object.assign(state.data, { tilt, tremor, eq, preds });
   renderSeries();
   return { tilt };
@@ -429,8 +433,8 @@ async function refresh() {
   const [status, notices, health, prob, eps, weather, firms, eq24, fr, msgs] = await Promise.all([
     safe(() => api("/api/status"), "status"), safe(() => api("/api/notices?limit=6"), "notices"), safe(() => api("/api/health"), "health"),
     safe(() => api("/api/probability"), "prob"), safe(() => api("/api/episodes"), "episodes"), safe(() => api("/api/weather"), "weather"),
-    safe(() => api("/api/firms?days=7"), "firms"), safe(() => api("/api/earthquakes?days=1"), "eq24"), safe(() => api("/api/frame?hours=1"), "frame"),
-    safe(() => api("/api/messages?limit=6"), "messages"),
+    safe(() => api("/api/firms?days=7"), "firms"), safe(() => api("/api/earthquakes?days=1"), "eq24"), safe(() => api("/api/frame?hours=3"), "frame"),
+    safe(() => api("/api/messages?limit=1"), "messages"),
   ]);
   if (status) renderStatus(status);
   if (notices) renderNotices(notices);
@@ -455,18 +459,34 @@ function segment(id, attr, onPick) {
 }
 function markOn(id, attr, value) { $(id).querySelectorAll("button").forEach((x) => x.classList.toggle("on", x.dataset[attr] === String(value))); }
 
+const DATE_IDS = ["range-start", "range-end"];
+/** Show the active window in the date pickers (Hawaii dates). */
+function syncDates() {
+  const [t0, t1] = windowRange();
+  $("range-start").value = hstDate(t0);
+  $("range-end").value = hstDate(t1);
+  DATE_IDS.forEach((id) => { $(id).max = hstDate(Date.now() / 1000); $(id).classList.toggle("on", !!state.custom); });
+}
+/** Use the picked dates as the window: start of the first day to the end of the last, Hawaii time. */
+function applyCustom() {
+  const a = $("range-start").value, b = $("range-end").value;
+  if (!a || !b || a > b) return false;
+  state.custom = { t0: hstMidnight(a), t1: hstMidnight(b) + 86400 };
+  store.set("custom", `${a}/${b}`);
+  markOn("range", "d", "");
+  DATE_IDS.forEach((id) => $(id).classList.add("on"));
+  return true;
+}
+
 function initControls() {
   const savedDays = store.get("days");
   if (savedDays === "all") state.days = "all";
   else if ([1, 7, 30, 90].includes(Number(savedDays))) state.days = Number(savedDays);
-  state.showEpisodes = store.get("showEpisodes") === "1";
-  if (["12", "24", "72"].includes(store.get("horizon"))) state.horizon = store.get("horizon");
   markOn("range", "d", state.days);
-  markOn("horizon", "h", state.horizon);
-  $("episodes-toggle").checked = state.showEpisodes;
-  segment("range", "d", (v) => { state.days = v === "all" ? "all" : Number(v); store.set("days", v); loadSeries(); });
-  segment("horizon", "h", (v) => { state.horizon = v; store.set("horizon", v); if (state.data.preds) renderProbChart(state.data.preds); });
-  $("episodes-toggle").addEventListener("change", (e) => { state.showEpisodes = e.target.checked; store.set("showEpisodes", e.target.checked ? "1" : "0"); renderSeries(); });
+  const [a, b] = (store.get("custom") || "").split("/");
+  if (a && b) { $("range-start").value = a; $("range-end").value = b; applyCustom(); }
+  segment("range", "d", (v) => { state.custom = null; state.days = v === "all" ? "all" : Number(v); store.set("days", v); store.set("custom", ""); loadSeries(); });
+  DATE_IDS.forEach((id) => $(id).addEventListener("change", () => { if (applyCustom()) loadSeries(); }));
 }
 
 function initTheme() {

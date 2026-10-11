@@ -4,7 +4,7 @@ USGS publishes live tilt only as plot images (the CSV release lags ~60 days; UWD
 on EarthScope FDSN). Two plots are used: the 2-day plot (live, fine) and the 3-month plot
 (bridges the release lag on a fresh install).
 
-Each digitization is interpolated onto the 5-minute grid. HVO's "raw data" plots are not on a
+Each digitization is interpolated onto 5-minute samples. HVO's "raw data" plots are not on a
 fixed baseline (the offset shifts between images, e.g. when the axis rescales), so every new
 digitization is first aligned to the values this table already holds (median difference over the
 frozen part of the overlap). The table therefore stays on one consistent baseline, which is in
@@ -20,7 +20,6 @@ from email.utils import parsedate_to_datetime
 import numpy as np
 
 from .. import db, digitize
-from ..config import GRID_S
 from .base import get, tracked
 
 BASE = "https://volcanoes.usgs.gov/vsc/captures/kilauea/"
@@ -30,15 +29,16 @@ PLOTS = {
     "uwd_plot3m": ("UWD-TILT-3month.png", 90 * 86400, "src_tilt_uwd_plot3m"),
 }
 TAIL_REFRESH_S = 6 * 3600
+SAMPLE_S = 300  # spacing of the stored samples; stitching reduces them to the hourly grid
 
 
 def to_grid(d: digitize.Digitized) -> tuple[np.ndarray, np.ndarray]:
-    """Interpolate pixel-column samples onto grid slots; no bridging across >4 px holes."""
+    """Interpolate pixel-column samples onto 5-minute samples; no bridging across >4 px holes."""
     px = (d.end - d.start) / 745
-    g = np.arange(int(np.ceil(d.t[0] / GRID_S)) * GRID_S, int(d.t[-1]) + 1, GRID_S)
+    g = np.arange(int(np.ceil(d.t[0] / SAMPLE_S)) * SAMPLE_S, int(d.t[-1]) + 1, SAMPLE_S)
     v = np.interp(g, d.t, d.v)
     i = np.clip(np.searchsorted(d.t, g), 1, len(d.t) - 1)
-    ok = (d.t[i] - d.t[i - 1]) <= max(4 * px, 2 * GRID_S)
+    ok = (d.t[i] - d.t[i - 1]) <= max(4 * px, 2 * SAMPLE_S)
     return g[ok], v[ok]
 
 

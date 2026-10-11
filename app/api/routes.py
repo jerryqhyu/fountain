@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Query
 
-from .. import db, frame
+from .. import db, frame, stitch
 from ..config import GRID_S, HST
 from ..episodes import catalog, suggest
 from ..model import service
@@ -36,9 +36,29 @@ def thin(t: np.ndarray, key: np.ndarray, max_points: int = MAX_POINTS) -> np.nda
     return np.unique(keep)
 
 
-def rows_since(table: str, cols: str, t0: int) -> pd.DataFrame:
+HOURS = Query(72, gt=0, le=24 * 800)
+START = Query(None, ge=0, description="unix seconds; with it, `hours` is ignored")
+END = Query(None, ge=0, description="unix seconds; defaults to now")
+
+
+def window(hours: float, start: int | None, end: int | None) -> tuple[int, int]:
+    """[t0, t1] of a request: an explicit start/end if given, else the last `hours`."""
+    now = int(time.time())
+    if start is not None:
+        return start, min(end or now, now)
+    return int(now - hours * 3600), now
+
+
+def rows_since(table: str, cols: str, t0: int, t1: int | None = None) -> pd.DataFrame:
     names = [c.strip() for c in cols.split(",")]
-    return pd.DataFrame(db.query(f"SELECT {cols} FROM {table} WHERE t>=? ORDER BY t", (t0,)), columns=names)
+    return pd.DataFrame(db.query(f"SELECT {cols} FROM {table} WHERE t>=? AND t<=? ORDER BY t", (t0, t1 or 2**62)),
+                        columns=names)
+
+
+def source_rows(key: str, t0: int, t1: int) -> pd.DataFrame:
+    """A source's hourly values (as stitching sees them) for slots in [t0, t1]."""
+    d = stitch.hourly(rows_since(stitch.SOURCE_TABLE[key], "t, v", t0 - GRID_S, t1), stitch.SAMPLE_S[key])
+    return d[(d["t"] >= t0) & (d["t"] <= t1)]
 
 
 def series_json(df: pd.DataFrame, value: str = "v", digits: int = 4) -> dict:
@@ -113,18 +133,18 @@ def health():
 
 # ------------------------------------------------------------------ series: every source + the stitched result
 @router.get("/series/tilt")
-def tilt(hours: float = Query(72, gt=0, le=24 * 800)):
-    t0 = int(time.time() - hours * 3600)
+def tilt(hours: float = HOURS, start: int | None = START, end: int | None = END):
+    t0, t1 = window(hours, start, end)
     info = db.kv_get("stitch:tilt", {}) or {}
     offsets = info.get("offsets", {})
-    stitched = rows_since("series_tilt", "t, v, src", t0)
+    stitched = rows_since("series_tilt", "t, v, src", t0, t1)
     sources = []
     for s in TILT_SOURCES:
         if s.key == "sdh_release":  # SDH is only meaningful through its per-gap fit: show the fitted slots
             d = stitched[stitched["src"] == "sdh_release"][["t", "v"]]
-            mapping = {"fits": [f for f in info.get("sdh_fits", []) if f["to"] >= t0]}
+            mapping = {"fits": [f for f in info.get("sdh_fits", []) if f["to"] >= t0 and f["from"] <= t1]}
         else:
-            d = rows_since(s.table, "t, v", t0)
+            d = source_rows(s.key, t0, t1)
             off = offsets.get(s.key) if s.key != "uwd_release" else 0.0
             mapping = {"offset": off}
             if off is None:
@@ -133,7 +153,7 @@ def tilt(hours: float = Query(72, gt=0, le=24 * 800)):
                 d = d.assign(v=d["v"] + off)
         sources.append({"key": s.key, "label": s.label, "note": s.note, "mapping": mapping,
                         **series_json(d), "health": health_row(s.key)})
-    full = frame.series("series_tilt", np.arange(t0 - 2 * 86400 - t0 % GRID_S, int(time.time()) + 1, GRID_S))
+    full = frame.series("series_tilt", np.arange(t0 - 2 * 86400 - t0 % GRID_S, t1 + 1, GRID_S))
     rate = frame.rate(full, 3).loc[t0:]
     rate_df = pd.DataFrame({"t": rate.index, "v": rate.to_numpy()})
     return {"units": "µrad", "component": "UWD azimuth 300° (radial)", "stitched": series_json(stitched),
@@ -143,18 +163,18 @@ def tilt(hours: float = Query(72, gt=0, le=24 * 800)):
 
 
 @router.get("/series/tremor")
-def tremor(hours: float = Query(72, gt=0, le=24 * 800)):
-    t0 = int(time.time() - hours * 3600)
+def tremor(hours: float = HOURS, start: int | None = START, end: int | None = END):
+    t0, t1 = window(hours, start, end)
     info = db.kv_get("stitch:tremor", {}) or {}
-    stitched = rows_since("series_rsam", "t, v, src", t0)
+    stitched = rows_since("series_rsam", "t, v, src", t0, t1)
     sources = []
     for s in TREMOR_SOURCES:
-        d = rows_since(s.table, "t, v", t0 - 86400)
+        d = source_rows(s.key, t0 - 86400, t1)
         mapping: dict = {"scale": 1.0}
         if s.key in SUBSTITUTE_TREMOR:  # show substitutes scaled the way they were used, around their gaps
             parts, used = [], []
             for r in info.get("ratios", []):
-                if r["station"] == s.key and r["to"] >= t0 - 86400:
+                if r["station"] == s.key and r["to"] >= t0 - 86400 and r["from"] <= t1 + 86400:
                     w = d[(d["t"] >= r["from"] - 86400) & (d["t"] <= r["to"] + 86400)]
                     parts.append(w.assign(v=w["v"] * r["ratio"]))
                     used.append(r)
@@ -163,7 +183,7 @@ def tremor(hours: float = Query(72, gt=0, le=24 * 800)):
         d = d[d["t"] >= t0]
         sources.append({"key": s.key, "label": s.label, "note": s.note, "mapping": mapping,
                         **series_json(d, digits=5), "health": health_row(s.key)})
-    return {"units": "µm/s", "band_hz": [1, 5], "window_s": 600, "stitched": series_json(stitched, digits=5),
+    return {"units": "µm/s", "band_hz": [1, 5], "window_s": GRID_S, "stitched": series_json(stitched, digits=5),
             "sources": sources, "slots_by_source": info.get("slots_by_source"), "missing_slots": info.get("missing"),
             "episodes": episode_marks(t0)}
 
@@ -197,9 +217,10 @@ def inflation_since_last() -> dict | None:
 
 
 @router.get("/earthquakes")
-def earthquakes(days: float = Query(7, gt=0, le=800)):
-    t0 = int(time.time() - days * 86400)
-    rows = db.query("SELECT id, t, lat, lon, depth, mag, place, region FROM earthquakes WHERE t>=? ORDER BY t", (t0,))
+def earthquakes(days: float = Query(7, gt=0, le=800), start: int | None = START, end: int | None = END):
+    t0, t1 = window(days * 24, start, end)
+    rows = db.query("SELECT id, t, lat, lon, depth, mag, place, region FROM earthquakes WHERE t>=? AND t<=? ORDER BY t",
+                    (t0, t1))
     df = pd.DataFrame(rows, columns=["id", "t", "lat", "lon", "depth", "mag", "place", "region"])
     depth = pd.cut(df["depth"], [-10, 5, 20, 1000], labels=["shallow (<5 km)", "intermediate (5–20 km)", "deep (>20 km)"])
     last24 = df[df["t"] >= time.time() - 86400]
@@ -220,22 +241,20 @@ def frame_rows(hours: float = Query(72, gt=0, le=24 * 800)):
     d = df.iloc[keep]
     cols = {c: [None if pd.isna(x) else (x if isinstance(x, str) else round(float(x), 5)) for x in d[c]]
             for c in frame.FEATURES + ["in_episode", "tilt_value", "rsam_1h_ums"]}
-    return {"t": d.index.astype(int).tolist(), "columns": cols, "labels": frame.LABELS,
-            "required": {m: r for m, r in service.REQUIRED.items()}}
+    return {"t": d.index.astype(int).tolist(), "columns": cols, "labels": frame.LABELS, "required": service.REQUIRED}
 
 
 @router.get("/predictions")
-def predictions(hours: float = Query(168, gt=0, le=24 * 800)):
-    t0 = int(time.time() - hours * 3600)
-    out = {}
-    for name in service.PRED_TABLE:
-        p = service.predictions(name, t0)
-        if len(p):
-            p = p.iloc[thin(p["t"].to_numpy(), p["p24"].astype(float).to_numpy())]
-        out[name] = {"t": p["t"].astype(int).tolist(),
-                     **{c: [None if pd.isna(x) else round(float(x), 5) for x in p[c]] for c in ("p12", "p24", "p72")}}
+def predictions(hours: float = Query(168, gt=0, le=24 * 800), start: int | None = START, end: int | None = END):
+    t0, t1 = window(hours, start, end)
+    p = service.predictions(t0, t1)
+    if len(p):
+        p = p.iloc[thin(p["t"].to_numpy(), p["p12"].astype(float).to_numpy())]
     meta = db.kv_get("model_meta", {}) or {}
-    return {"models": out, "trained_at": meta.get("trained_at")}
+    return {"t": p["t"].astype(int).tolist(), "p12": [None if pd.isna(x) else round(float(x), 5) for x in p["p12"]],
+            "horizon_h": service.HORIZON_H, "version": meta.get("version"),
+            "refits": [c for c in meta.get("refits", []) if t0 <= c <= t1],
+            "first_prediction": meta.get("first_prediction"), "trained_at": meta.get("trained_at")}
 
 
 @router.get("/probability")
