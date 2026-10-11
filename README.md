@@ -103,8 +103,9 @@ whether HVO's latest update reports precursory activity (a flag that fades with 
 age, 24 h e-folding).
 
 The fit is an L2-penalized logistic regression. The penalty weight (`L2` in `app/model/hazard.py`,
-currently 20) comes from a walk-forward grid search, `uv run python -m scripts.l2_grid`: the
-strongest penalty whose log loss on completed cycles is within one standard error of the best.
+currently 10) comes from a walk-forward grid search, `uv run python -m scripts.l2_grid`: between
+the weight with the best log loss on completed cycles (about 2) and the strongest one within one
+standard error of it (20), where monthly fits are steadier at little cost in accuracy.
 Changing it, or the model version, makes the next pipeline run refit every month.
 
 It is a discrete-time survival model: a logistic hourly hazard with splines on repose time and

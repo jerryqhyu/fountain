@@ -1,7 +1,7 @@
 """hazard-v1: discrete-time survival model (hourly logistic hazard).
 
 h(x_t) = P(onset in (t, t+1h] | no onset yet, x_t), fitted by L2-penalized logistic regression
-(weight L2 on the squared coefficients of the standardized design, chosen by scripts/l2_grid.py)
+(weight L2 on the squared coefficients of the standardized design, see scripts/l2_grid.py)
 on the hourly frame rows of every pause since episode 4. Nonlinear effects of repose time and tilt recovery
 enter through natural-ish cubic splines with *constant extrapolation*, so states outside
 the training range (e.g. a record-long pause) saturate instead of blowing up. Tilt recovery is
@@ -18,11 +18,12 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import SplineTransformer, StandardScaler
 
-VERSION = "hazard-1.1"  # 1.1: L2 3.3 -> 20
-# Ridge penalty (sklearn's C = 1 / L2). Walk-forward log loss on completed cycles is flat from
-# about 2 to 5 and best near 2; 20 is the strongest penalty still within one standard error of
-# that best (bootstrap over cycles), which makes consecutive monthly fits differ about a quarter less.
-L2 = 20.0
+VERSION = "hazard-1.1"  # 1.1: L2 3.3 -> 10
+# Ridge penalty (sklearn's C = 1 / L2), from scripts/l2_grid.py. Walk-forward log loss on completed
+# cycles is best near 2 and anything up to 20 is within one standard error of that. 10 sits between:
+# consecutive monthly fits differ about a quarter less than at 3.3 for 2 % more log loss, and going
+# on to 20 more than doubles that cost for little further steadiness.
+L2 = 10.0
 
 GROUPS = {  # design-matrix blocks -> source feature
     "hours_since_end": "hours_since_end",

@@ -5,8 +5,9 @@
 For each penalty, every month is predicted by a model fitted only on data before it (as in
 production). Reported per penalty: log loss and Brier skill on completed cycles, how much
 consecutive fits disagree on the same hours (median absolute change in the log-odds of the
-12 h probability), and the mean probability over the still-open pause. The pick is the
-strongest penalty whose log loss is within one standard error (bootstrap over cycles) of the best.
+12 h probability), and the mean probability over the still-open pause. The last line gives the
+range to choose from: the penalty with the best log loss, and the strongest one still within one
+standard error of it (bootstrap over cycles). hazard.L2 is picked inside that range.
 """
 from __future__ import annotations
 
@@ -55,10 +56,10 @@ def main() -> None:
     rng = np.random.default_rng(0)
     draws = rng.integers(0, len(c), (2000, len(c)))
     se = float(np.std(c["sum"].to_numpy()[draws].sum(axis=1) / c["size"].to_numpy()[draws].sum(axis=1)))
-    pick = max((r for r in rows if r["log_loss"] <= best["log_loss"] + se), key=lambda r: r["l2"])
+    upper = max((r for r in rows if r["log_loss"] <= best["log_loss"] + se), key=lambda r: r["l2"])
     print(pd.DataFrame([{k: v for k, v in r.items() if k != "by_cycle"} for r in rows]).round(4).to_string(index=False))
     print(f"best log loss at L2={best['l2']:g} ({best['log_loss']:.4f} ± {se:.4f} over {len(c)} cycles); "
-          f"strongest penalty within one standard error: L2={pick['l2']:g} (in use: {HazardModel().l2:g})")
+          f"strongest penalty within one standard error: L2={upper['l2']:g}; in use: L2={HazardModel().l2:g}")
 
 
 if __name__ == "__main__":
