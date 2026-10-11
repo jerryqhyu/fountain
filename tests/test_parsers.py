@@ -253,6 +253,21 @@ def test_model_gives_nan_when_an_input_is_missing():
     assert np.isfinite(h[[0, 2]]).all() and np.isfinite(p[[0, 2]]).all()
 
 
+def test_stronger_l2_shrinks_the_fit_and_a_version_change_forces_a_refit(monkeypatch):
+    from app.model import hazard, service
+    df = _pause_hours()
+    y = (df["recovery_ratio"] > 1.1).to_numpy().astype(float)
+    size = lambda l2: float(np.abs(hazard.HazardModel(l2).fit(df, y).clf_.coef_).sum())  # noqa: E731
+    assert size(200.0) < size(20.0) < size(2.0)
+    assert hazard.HazardModel().l2 == hazard.L2
+    # a stored model from another version is refitted even though no new month has begun
+    meta = {"version": "hazard-1.0", "fit_through": 2**40}
+    monkeypatch.setattr(service, "models", lambda: {"meta": meta})
+    assert service.stale(1790000000)
+    meta["version"] = hazard.VERSION
+    assert not service.stale(1790000000)
+
+
 def test_missing_spans_name_the_absent_inputs(monkeypatch):
     from app.model import service
     t = np.arange(1790002800, 1790002800 + 10 * 3600, 3600)

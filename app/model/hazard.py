@@ -1,6 +1,7 @@
 """hazard-v1: discrete-time survival model (hourly logistic hazard).
 
-h(x_t) = P(onset in (t, t+1h] | no onset yet, x_t), fitted by penalized logistic regression
+h(x_t) = P(onset in (t, t+1h] | no onset yet, x_t), fitted by L2-penalized logistic regression
+(weight L2 on the squared coefficients of the standardized design, chosen by scripts/l2_grid.py)
 on the hourly frame rows of every pause since episode 4. Nonlinear effects of repose time and tilt recovery
 enter through natural-ish cubic splines with *constant extrapolation*, so states outside
 the training range (e.g. a record-long pause) saturate instead of blowing up. Tilt recovery is
@@ -17,7 +18,11 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import SplineTransformer, StandardScaler
 
-VERSION = "hazard-1.0"
+VERSION = "hazard-1.1"  # 1.1: L2 3.3 -> 20
+# Ridge penalty (sklearn's C = 1 / L2). Walk-forward log loss on completed cycles is flat from
+# about 2 to 5 and best near 2; 20 is the strongest penalty still within one standard error of
+# that best (bootstrap over cycles), which makes consecutive monthly fits differ about a quarter less.
+L2 = 20.0
 
 GROUPS = {  # design-matrix blocks -> source feature
     "hours_since_end": "hours_since_end",
@@ -37,8 +42,8 @@ CLIP = {
 class HazardModel:
     version = VERSION
 
-    def __init__(self, C: float = 0.3):
-        self.C = C
+    def __init__(self, l2: float = L2):
+        self.l2 = l2
 
     # --- design matrix -------------------------------------------------------
     def _prep(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -84,7 +89,7 @@ class HazardModel:
         self.rr_cap_ = float(np.nanmax(pos)) if np.isfinite(pos).any() else CLIP["recovery_ratio"][1]
         x = self._prep(df)
         X, self.names_ = self._design(x, fit=True)
-        self.clf_ = LogisticRegression(C=self.C, max_iter=5000)
+        self.clf_ = LogisticRegression(C=1.0 / self.l2, max_iter=5000)
         self.clf_.fit(X, y1.astype(int))
         self.train_range_ = {c: (float(df[c].min()), float(df[c].max())) for c in GROUPS}
         self.x_mean_design_ = X.mean(axis=0)
