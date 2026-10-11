@@ -233,6 +233,51 @@ def test_comcat_pull_follows_revisions_and_deletions(monkeypatch, tmp_path):
     assert got == {"hv1": 1.9, "hv3": 1.1, "old": 3.0}  # revised, added, removed upstream; outside the window untouched
 
 
+def _pause_hours(n: int = 400) -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    return pd.DataFrame({
+        "hours_since_end": rng.uniform(1, 400, n), "recovery_ratio": rng.uniform(0, 1.3, n),
+        "tilt_rate_24h": rng.normal(0.05, 0.05, n), "rsam_ratio_log": rng.normal(0, 0.1, n),
+        "precursor": rng.integers(0, 2, n).astype(float), "eq_summit_ew": rng.uniform(0, 3, n),
+        "last_deflation_urad": 15.0})
+
+
+def test_model_gives_nan_when_an_input_is_missing():
+    from app.model.hazard import HazardModel
+    df = _pause_hours()
+    hz = HazardModel().fit(df, (df["recovery_ratio"] > 1.1).to_numpy().astype(float))
+    rows = df.iloc[:3].copy()
+    rows.loc[rows.index[1], "rsam_ratio_log"] = np.nan  # e.g. no tremor source for that hour
+    h, p = hz.hazard(rows), hz.predict(rows)[12]
+    assert np.isnan(h[1]) and np.isnan(p[1])
+    assert np.isfinite(h[[0, 2]]).all() and np.isfinite(p[[0, 2]]).all()
+
+
+def test_missing_spans_name_the_absent_inputs(monkeypatch):
+    from app.model import service
+    t = np.arange(1790002800, 1790002800 + 10 * 3600, 3600)
+    df = _pause_hours(10).assign(in_episode=0.0).set_index(pd.Index(t, name="t"))
+    df.loc[t[2]:t[4], "rsam_ratio_log"] = np.nan
+    df.loc[t[4], "tilt_rate_24h"] = np.nan
+    df.loc[t[7], ["rsam_ratio_log", "in_episode"]] = [np.nan, 1.0]  # no value there because of the episode
+    monkeypatch.setattr(service.db, "kv_get", lambda k, d=None: {"first_prediction": int(t[0])})
+    monkeypatch.setattr(service.frame, "load", lambda t0=None, t1=None: df)
+    spans = service.missing_spans(int(t[0]))
+    assert [(s["from"], s["to"], s["features"]) for s in spans] == [(t[2], t[4], ["tilt_rate_24h", "rsam_ratio_log"])]
+    assert spans[0]["labels"][1] == "Tremor 1 h vs 24 h"
+
+
+def test_card_reports_an_absent_prediction_instead_of_an_older_one():
+    from app.model.service import current_slot
+    t = np.arange(1790002800, 1790002800 + 6 * 3600, 3600)
+    fr = pd.DataFrame(index=pd.Index(t, name="t"))
+    preds = lambda ts: pd.DataFrame({"t": ts, "p12": 0.1})  # noqa: E731
+    assert current_slot(fr, preds(t)) == (t[5], True)
+    assert current_slot(fr, preds(t[:5])) == (t[4], True)  # newest hour still waiting for its inputs
+    assert current_slot(fr, preds(t[:4])) == (t[4], False)  # two hours without a value: reported as absent
+    assert current_slot(fr, preds(t[:0])) == (t[4], False)
+
+
 def test_robust_rate_ignores_short_step():
     import numpy as np
     import pandas as pd

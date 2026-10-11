@@ -51,7 +51,9 @@ sources (one table each, native resolution)
   (`app/sources/__init__.py`). Sources that aren't directly comparable are mapped first, and the
   mapping is stored and shown on the dashboard.
 * **None:** the model outputs NULL for a slot when any input it requires is missing (no
-  imputation), or when an episode is under way.
+  imputation), or when an episode is under way. The dashboard shades those hours in the
+  probability chart ("feature missing") and, once the newest two slots both lack a value,
+  shows a shaded tile naming the missing input instead of the last older probability.
 * **Jobs:** `pipeline.update()` runs every 5 min: it re-stitches and recomputes frame and
   predictions from the earliest changed slot (at least the last 2 days). `pipeline.rebuild()`
   runs daily and rebuilds the whole grid. The models are refitted only when a new month begins

@@ -177,9 +177,13 @@ function renderModelCard(m) {
   const card = $("card-hazard");
   const tiles = card.querySelector("[data-tiles]");
   if (!m || m.p12 == null) {
-    tiles.innerHTML = `<div class="tile muted">No valid prediction yet${m?.missing_now?.length ? ": missing " + esc(m.missing_now.join(", ")) : ""}</div>`;
+    // the model gave no number for the current hour: say why, shaded, instead of showing an older value
+    const why = m?.reason === "feature_missing" ? `Feature missing: ${m.missing.map((f) => f.label).join(", ")}`
+      : m?.reason === "episode" ? "Episode under way" : "No valid prediction yet";
+    tiles.innerHTML = `<div class="tile none"><div class="h">next 12 h</div><div class="v">—</div><div class="why">${esc(why)}</div></div>`;
     card.querySelector("[data-trend]").textContent = "";
-    card.querySelector("[data-lag]").textContent = "";
+    card.querySelector("[data-lag]").textContent = (m?.t ? `No prediction for ${fmtHST(m.t)}` : "")
+      + (m?.last_valid ? ` · last value ${pct(m.last_valid.p12)}, ${fmtHST(m.last_valid.t)}` : "");
     card.querySelector("[data-factors]").innerHTML = "";
     return;
   }
@@ -263,10 +267,18 @@ function renderProbChart(p) {
   } else if (p.first_prediction && t1 <= p.first_prediction) {
     ann.push({ xref: "paper", yref: "paper", x: 0.5, y: 0.5, showarrow: false, text: `No predictions before ${fmtHST(p.first_prediction, true)}: the first model needed December 2024 – June 2025 to fit`, font: { size: 12, color: css("--muted") } });
   }
+  // hours without a prediction because an input was missing: shaded, labelled where there is room
+  for (const m of p.missing || []) {
+    const a = Math.max(m.from - 1800, t0), b = Math.min(m.to + 1800, t1);
+    if (b <= a) continue;
+    shapes.push({ type: "rect", xref: "x", yref: "paper", x0: hst(a), x1: hst(b), y0: 0, y1: 1, line: { width: 0 }, fillcolor: css("--muted"), opacity: 0.16, layer: "below" });
+    if ((b - a) / (t1 - t0) > 0.07) ann.push({ x: hst((a + b) / 2), xref: "x", yref: "paper", y: 1, yanchor: "top", yshift: -6, showarrow: false, text: "feature missing",
+      hovertext: m.labels.join(", "), font: { size: 11.5, color: css("--ink-2") } });
+  }
   for (const c of p.refits || []) shapes.push({ type: "line", xref: "x", yref: "paper", x0: hst(c), x1: hst(c), y0: 0, y1: 1, line: { color: css("--muted"), width: 1, dash: "dot" }, opacity: 0.45, layer: "below" });
   Plotly.react("chart-prob", traces, baseLayout({ margin: { l: 44, r: 44, t: 14, b: 34 }, shapes, annotations: ann, yaxis: { ticksuffix: "%", rangemode: "tozero" } }), config);
   $("prob-note").textContent = "P(onset within 12 h), one value per hour, all out-of-sample: each month comes from a model fitted only on data before that month began"
-    + ((p.refits || []).length ? " (dotted lines = monthly refits)" : "") + ". Gaps = None (episode under way or an input missing).";
+    + ((p.refits || []).length ? " (dotted lines = monthly refits)" : "") + ". No value while an episode is under way or an input is missing (shaded).";
 }
 
 const TILT_COLORS = { uwd_release: "--s1", uwd_plot2d: "--s2", uwd_plot3m: "--s3", sdh_release: "--s4" };
